@@ -8,11 +8,13 @@ button{transition:transform .15s ease,box-shadow .15s ease,background .15s ease}
 button:hover:not(:disabled){transform:translateY(-1px)}
 button:focus-visible,input:focus-visible{outline:3px solid #5eead4;outline-offset:2px}
 
-.mindmate-app{display:grid;grid-template-columns:230px minmax(0,1fr);background:#eef2fb;min-height:760px}
+.mindmate-app{display:grid;grid-template-columns:230px minmax(0,1fr);background:#eef2fb;min-height:760px;width:100%;max-width:100%;overflow-x:hidden}
 .mindmate-app:has(.mm-public-content){display:block}
+.mindmate-app.mm-elderly-shell{display:grid;grid-template-columns:230px minmax(0,1fr);overflow-x:hidden}
 
 /* ---- Caregiver / Admin sidebar ---- */
 .mm-sidebar{background:linear-gradient(180deg,#101827 0%,#17233a 100%);color:#fff;padding:22px 14px;display:flex;flex-direction:column;min-height:760px}
+.mm-elderly-shell .mm-sidebar{position:sticky;top:0;height:100vh;max-height:100vh;overflow-y:auto}
 .mm-brand{display:flex;align-items:center;gap:10px;padding:4px 10px 28px;border-bottom:1px solid rgba(255,255,255,.12)}
 .mm-brand-mark{width:38px;height:38px;border-radius:11px;background:#fff;color:#0d9488;display:grid;place-items:center}
 .mm-brand strong{display:block;font-family:'Poppins',Inter,sans-serif;font-size:16px}
@@ -24,11 +26,10 @@ button:focus-visible,input:focus-visible{outline:3px solid #5eead4;outline-offse
 .mm-logout{margin-top:auto;width:100%}.mm-logout:hover{background:rgba(255,255,255,.08);color:#fff}
 
 /* ---- Main content area ---- */
-.mm-content{min-width:0;background:#eef2fb;min-height:760px;position:relative}
+.mm-content,.mm-public-content{min-width:0;width:100%;background:#eef2fb;min-height:760px;position:relative}
 .mm-content:before{content:"";display:block;height:4px;background:linear-gradient(90deg,#0d9488,#a855f7,#3b82f6)}
 .mm-public-content{min-height:760px;background:#eef2fb}
 .mm-content > div:not(.mm-elderly-nav):not(.mm-mobile-nav),.mm-public-content > div:not(.mm-elderly-nav):not(.mm-mobile-nav){max-width:none!important}
-.mm-public-content:has(.mm-elderly-nav) > div:not(.mm-elderly-nav):not(.mm-mobile-nav){padding-bottom:calc(78px + env(safe-area-inset-bottom))!important}
 
 /* Make the existing inline UI visually consistent with the design reference. */
 .mindmate-app input{background:#fff!important;border:1px solid #dbe6f5!important;box-shadow:0 2px 8px rgba(15,23,42,.03);border-radius:10px}
@@ -41,16 +42,17 @@ h1,h2,h3{font-family:'Poppins',Inter,sans-serif}
 
 @media(max-width:850px){
   .mindmate-app{grid-template-columns:1fr;margin:0;border-radius:0;min-height:100vh;min-height:100dvh}
+  .mindmate-app.mm-elderly-shell{grid-template-columns:1fr}
   .mm-sidebar{display:none}.mm-content,.mm-public-content{min-height:100vh;min-height:100dvh}
-  .mm-content:has(.mm-mobile-nav) > div:not(.mm-mobile-nav){padding-bottom:calc(78px + env(safe-area-inset-bottom))!important}
+  .mm-content:has(.mm-mobile-nav) > div:not(.mm-mobile-nav),.mm-public-content:has(.mm-elderly-nav) > div:not(.mm-elderly-nav):not(.mm-mobile-nav){padding-bottom:calc(64px + env(safe-area-inset-bottom))!important}
 }
 @media(max-width:600px){
   .mindmate-app{margin:0}.mm-content > div,.mm-public-content > div{padding-left:16px!important;padding-right:16px!important}
 }
 .mm-mobile-nav{display:none!important}
 @media(max-width:850px){.mm-mobile-nav{display:flex!important}}
-.mm-elderly-nav{display:flex!important}
-.mm-mobile-nav,.mm-elderly-nav{position:fixed;left:0;right:0;bottom:0;z-index:50;padding-bottom:env(safe-area-inset-bottom)}
+.mm-elderly-nav{display:none!important}
+.mm-mobile-nav,.mm-elderly-nav{position:fixed;left:0;right:0;bottom:0;z-index:50;min-height:0;padding-bottom:calc(6px + env(safe-area-inset-bottom))!important}
 
 /* ============ Desktop app-shell containment ============ */
 @media(min-width:1500px){
@@ -58,15 +60,16 @@ h1,h2,h3{font-family:'Poppins',Inter,sans-serif}
   .mindmate-app{max-width:1440px;margin:0 auto;border-radius:24px;box-shadow:0 30px 90px rgba(15,23,42,.14);overflow:hidden}
 }
 
-/* ============ Phone-frame treatment for elderly/auth flow on wide screens ============ */
+/* ============ Full-width elderly app on wide screens ============ */
 @media(min-width:851px){
+  .mm-elderly-content{min-height:760px}
   .mm-phone-frame{
-    max-width:460px;margin:34px auto;background:#0b1220;border-radius:40px;padding:12px;
-    box-shadow:0 40px 90px rgba(15,23,42,.22),0 0 0 1px rgba(15,23,42,.06);
+    max-width:none;margin:0;background:#eef2fb;border-radius:0;padding:0;box-shadow:none;
   }
-  .mm-phone-frame > div{border-radius:30px!important;overflow:hidden;min-height:680px!important;position:relative;transform:translateZ(0)}
-  .mm-phone-frame:before{content:"";display:block;width:70px;height:5px;background:rgba(255,255,255,.25);border-radius:99px;margin:0 auto 10px}
+  .mm-phone-frame > div:not(.mm-elderly-nav):not(.mm-mobile-nav){border-radius:0!important;overflow:visible;min-height:760px!important;position:relative;transform:none}
+  .mm-phone-frame:before{display:none}
 }
+@media(max-width:850px){.mm-elderly-nav{display:flex!important}}
 
 /* ============ Animations ============ */
 @keyframes mmFadeIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
@@ -128,4 +131,8 @@ button:active:not(:disabled){transform:scale(.96)}
 /* ============ Extra responsive polish ============ */
 @media(max-width:420px){
   .mm-stagger-row{gap:8px!important}
+}
+
+@media(max-width:600px){
+  .mm-mobile-nav button,.mm-elderly-nav button{min-width:44px;min-height:44px}
 }

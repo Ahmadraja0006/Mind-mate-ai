@@ -6,7 +6,7 @@ import {
   Globe, Contrast, LogOut, ShieldCheck, Clock, Star, AlertTriangle, Info,
   WifiOff, Wifi, Type as TypeIcon, Eye, PlayCircle, RotateCcw, Flame,
   ClipboardList, Pill, Sparkles, BarChart3, UserCog, Gamepad2, Puzzle,
-  Plus, Trophy, Target, Lock, ChevronDown,
+  Plus, Trophy, Target, Lock, ChevronDown, Trash2, Pencil,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -171,6 +171,7 @@ function makeTrendSeries(base, days = 7) {
 function buildDemoUsers() {
   return DEMO_ELDERLY_NAMES.map((name, i) => {
     const memory = makeTrendSeries(60 + i);
+    const objectRecall = makeTrendSeries(58 + i);
     const attention = makeTrendSeries(55 + i);
     const pattern = makeTrendSeries(65 + i);
     const last = memory[memory.length - 1].score;
@@ -184,7 +185,7 @@ function buildDemoUsers() {
       lastActivity: i === 3 ? "3 days ago" : "Today",
       accuracy: 60 + ((i * 7) % 35),
       trainingScore: last,
-      memory, attention, pattern,
+      memory, objectRecall, attention, pattern,
       difficulties: { memory: 1 + (i % 4), objectRecall: 1 + ((i + 1) % 4), pattern: 1 + ((i + 2) % 4), attention: 1 + ((i + 3) % 4) },
     };
   });
@@ -454,7 +455,10 @@ function ObjectRecallGame({ level, lang, onComplete }) {
   const [missing] = useState(() => items[Math.floor(Math.random() * items.length)]);
   const [phase, setPhase] = useState("show");
   const shown = items.filter(i => i.id !== missing.id);
-  const [optionSet] = useState(() => shuffle(pickN(items, Math.min(4, items.length))));
+  const [optionSet] = useState(() => shuffle([
+    missing,
+    ...pickN(items.filter(i => i.id !== missing.id), Math.min(3, items.length - 1)),
+  ]));
   const elapsed = useTimer(phase === "recall");
   const seconds = Math.max(4, Math.min(9, count));
 
@@ -655,7 +659,7 @@ function RoleSelect({ onSelect }) {
         <div style={{ color: palette.inkSoft, fontSize: 14 }}>Choose how you want to use MindMate AI</div>
       </div>
       <div className="mm-stagger-row" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {roles.map(r => (
+          {roles.map(r => (
           <button key={r.key} onClick={() => onSelect(r.key)} style={{
             display: "flex", alignItems: "center", gap: 14, textAlign: "left", cursor: "pointer",
             background: "#fff", border: `1px solid ${palette.mist}`, borderRadius: 18, padding: 16,
@@ -671,7 +675,7 @@ function RoleSelect({ onSelect }) {
             </div>
             <ChevronRight size={20} color={palette.inkSoft} />
           </button>
-        ))}
+          ))}
       </div>
       <div style={{ marginTop: 26 }}><DisclaimerBanner compact /></div>
     </div>
@@ -714,7 +718,6 @@ function Login({ role, onLogin, onDemo, onBack, onRegister }) {
     </div>
   );
 }
-
 function ElderlyHome({ user, lang, onNav, netOnline }) {
   const t = STRINGS[lang];
   const activities = [
@@ -987,15 +990,55 @@ function Row({ label, value, big }) {
   );
 }
 
-function ProgressScreen({ lang, user, sessions, onBack }) {
+function ProgressScreen({ lang, demoUser, token, sessions, onBack }) {
   const t = STRINGS[lang];
   const [tab, setTab] = useState("overview");
-  const data = user.memory.map((d, i) => ({
-    day: d.day, memory: d.score, attention: user.attention[i]?.score, pattern: user.pattern[i]?.score,
+  const [remoteSessions, setRemoteSessions] = useState([]);
+
+  useEffect(() => {
+    if (!token) {
+      setRemoteSessions([]);
+      return undefined;
+    }
+    let cancelled = false;
+    api("/me/performance", {}, token)
+      .then(({ sessions: loaded = [] }) => { if (!cancelled) setRemoteSessions(loaded); })
+      .catch(() => { if (!cancelled) setRemoteSessions([]); });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const labels = { memory: "Memory Match", objectRecall: "Object Recall", pattern: "Pattern Recognition", attention: "Attention Game" };
+  const normalizeSession = (session) => ({
+    id: session.id,
+    gameKey: session.gameKey || session.game_key,
+    label: session.label || labels[session.gameKey || session.game_key] || session.gameKey || session.game_key,
+    score: Number(session.score || 0),
+    accuracy: Number(session.accuracy || 0),
+    date: session.date || session.client_created_at || session.created_at,
+  });
+  const merged = new Map();
+  [...remoteSessions, ...sessions].map(normalizeSession).forEach(session => merged.set(session.id, session));
+  const allSessions = [...merged.values()].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const gameKeys = ["memory", "objectRecall", "pattern", "attention"];
+  const series = Object.fromEntries(gameKeys.map(key => {
+    const actual = allSessions.filter(session => session.gameKey === key).map(session => ({
+      day: new Date(session.date).toLocaleDateString(), score: session.score, accuracy: session.accuracy,
+    }));
+    const fallback = demoUser ? demoUser[key] || [] : [];
+    return [key, actual.length ? actual : fallback];
   }));
-  const recent = sessions.slice(-6).slice().reverse();
+  const chartLength = Math.max(1, ...gameKeys.map(key => series[key].length));
+  const data = Array.from({ length: chartLength }, (_, i) => ({
+    day: gameKeys.map(key => series[key][i]?.day).find(Boolean) || `Session ${i + 1}`,
+    memory: series.memory[i]?.score,
+    objectRecall: series.objectRecall[i]?.score,
+    pattern: series.pattern[i]?.score,
+    attention: series.attention[i]?.score,
+  }));
+  const recent = allSessions.slice(-6).reverse();
   const last = (arr) => arr[arr.length - 1]?.score ?? 0;
-  const overall = Math.round((last(user.memory) + last(user.attention) + last(user.pattern)) / 3);
+  const currentScores = gameKeys.map(key => last(series[key])).filter((score, index) => series[gameKeys[index]].length);
+  const overall = currentScores.length ? Math.round(currentScores.reduce((sum, score) => sum + score, 0) / currentScores.length) : 0;
   return (
     <div style={{ padding: 24 }}>
       <TopBar title={t.myProgress} onBack={onBack} />
@@ -1018,6 +1061,7 @@ function ProgressScreen({ lang, user, sessions, onBack }) {
               <Tooltip />
               <Legend />
               <Line type="monotone" dataKey="memory" name="Memory" stroke={palette.green} strokeWidth={3} dot={false} />
+              <Line type="monotone" dataKey="objectRecall" name="Object Recall" stroke={palette.marigold} strokeWidth={3} dot={false} />
               <Line type="monotone" dataKey="attention" name="Attention" stroke={palette.purple} strokeWidth={3} dot={false} />
               <Line type="monotone" dataKey="pattern" name="Pattern" stroke={palette.blue} strokeWidth={3} dot={false} />
             </LineChart>
@@ -1027,9 +1071,10 @@ function ProgressScreen({ lang, user, sessions, onBack }) {
       <Card style={{ marginBottom: 16 }}>
         <div style={{ fontWeight: 800, marginBottom: 16 }}>Game Performance</div>
         <div className="mm-stagger-row" style={{ display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 14 }}>
-          <Ring pct={last(user.memory)} color={palette.green} label="Memory" />
-          <Ring pct={last(user.attention)} color={palette.purple} label="Attention" />
-          <Ring pct={last(user.pattern)} color={palette.blue} label="Pattern" />
+          <Ring pct={last(series.memory)} color={palette.green} label="Memory" />
+          <Ring pct={last(series.objectRecall)} color={palette.marigold} label="Object Recall" />
+          <Ring pct={last(series.attention)} color={palette.purple} label="Attention" />
+          <Ring pct={last(series.pattern)} color={palette.blue} label="Pattern" />
           <Ring pct={overall} color={palette.ink} label="Overall" />
         </div>
       </Card>
@@ -1040,7 +1085,7 @@ function ProgressScreen({ lang, user, sessions, onBack }) {
           <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${palette.mist}` }}>
             <div>
               <div style={{ fontWeight: 700, fontSize: 14 }}>{s.label}</div>
-              <div style={{ fontSize: 11, color: palette.inkSoft }}>{new Date(s.date).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div>
+                <div style={{ fontSize: 11, color: palette.inkSoft }}>{new Date(s.date).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {s.accuracy}% accuracy</div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontWeight: 700, color: palette.pine }}>{s.score}%</span>
@@ -1053,12 +1098,31 @@ function ProgressScreen({ lang, user, sessions, onBack }) {
   );
 }
 
-function MemoryAssistant({ lang, onBack, reminders, routine, onToggleRoutine, onAddReminder }) {
+function MemoryAssistant({ lang, onBack, token, reminders, routine, remindersLoading, remindersError, onToggleRoutine, onAddReminder, onDeleteReminder }) {
   const t = STRINGS[lang];
   const [tab, setTab] = useState("medicine");
   const [form, setForm] = useState({ title: "", time: "", note: "" });
   const [showForm, setShowForm] = useState(false);
   const [enabled, setEnabled] = useState(() => reminders.map(() => true));
+  const [appointments, setAppointments] = useState([]);
+  const [appointmentsLoading, setAppointmentsLoading] = useState(Boolean(token));
+  const [appointmentsError, setAppointmentsError] = useState("");
+  useEffect(() => setEnabled(reminders.map(() => true)), [reminders]);
+  useEffect(() => {
+    if (!token) {
+      setAppointmentsLoading(false);
+      return;
+    }
+    setAppointmentsLoading(true);
+    api("/appointments", {}, token).then(({ appointments: loaded = [] }) => {
+      setAppointments(loaded);
+      setAppointmentsLoading(false);
+    }).catch(() => {
+      setAppointments([]);
+      setAppointmentsLoading(false);
+      setAppointmentsError("Appointments could not be loaded. Try again later.");
+    });
+  }, [token]);
   const toggleEnabled = (i) => setEnabled(e => e.map((v, idx) => idx === i ? !v : v));
   return (
     <div style={{ padding: 24 }}>
@@ -1076,8 +1140,11 @@ function MemoryAssistant({ lang, onBack, reminders, routine, onToggleRoutine, on
               color: palette.pine, fontWeight: 700, fontSize: 13, cursor: "pointer",
             }}><Plus size={16} /> Add Reminder</button>
           </div>
+          {remindersLoading && <div style={{ color: palette.inkSoft, fontSize: 14, padding: "8px 0" }}>Loading reminders...</div>}
+          {remindersError && <div role="alert" style={{ color: palette.danger, background: "#FDECEA", borderRadius: 10, padding: 10, marginBottom: 10 }}>{remindersError}</div>}
+          {!remindersLoading && !remindersError && reminders.length === 0 && <div style={{ color: palette.inkSoft, fontSize: 14, padding: "8px 0" }}>No reminders yet. Add one to get started.</div>}
           {reminders.map((r, i) => (
-            <div key={i} style={{
+            <div key={r.id || `${r.title}-${i}`} style={{
               display: "flex", alignItems: "center", gap: 12, padding: "12px 0",
               borderBottom: i < reminders.length - 1 ? `1px solid ${palette.mist}` : "none",
             }}>
@@ -1090,15 +1157,20 @@ function MemoryAssistant({ lang, onBack, reminders, routine, onToggleRoutine, on
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontWeight: 800, color: palette.pine, fontSize: 13, marginBottom: 4 }}>{r.time}</div>
-                <button onClick={() => toggleEnabled(i)} aria-label="Toggle reminder" style={{
-                  width: 38, height: 22, borderRadius: 999, border: "none", cursor: "pointer", position: "relative",
-                  background: enabled[i] !== false ? palette.pine : palette.mist,
-                }}>
-                  <div style={{
-                    width: 16, height: 16, borderRadius: "50%", background: "#fff", position: "absolute",
-                    top: 3, left: enabled[i] !== false ? 19 : 3, transition: "left .15s ease",
-                  }} />
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <button onClick={() => toggleEnabled(i)} aria-label="Toggle reminder" style={{
+                    width: 38, height: 22, borderRadius: 999, border: "none", cursor: "pointer", position: "relative",
+                    background: enabled[i] !== false ? palette.pine : palette.mist,
+                  }}>
+                    <div style={{
+                      width: 16, height: 16, borderRadius: "50%", background: "#fff", position: "absolute",
+                      top: 3, left: enabled[i] !== false ? 19 : 3, transition: "left .15s ease",
+                    }} />
+                  </button>
+                  <button onClick={() => onDeleteReminder(r.id)} aria-label={`Delete ${r.title}`} title="Delete reminder" style={{ background: "none", border: "none", color: palette.danger, cursor: "pointer", padding: 2 }}>
+                    <Trash2 size={16} />
+                  </button>
+                </div>
               </div>
             </div>
           ))}
@@ -1108,6 +1180,8 @@ function MemoryAssistant({ lang, onBack, reminders, routine, onToggleRoutine, on
                 style={{ flex: 2, minWidth: 140, padding: 10, borderRadius: 10, border: `1px solid ${palette.mist}` }} />
               <input placeholder="8:00 AM" value={form.time} onChange={e => setForm({ ...form, time: e.target.value })}
                 style={{ flex: 1, minWidth: 90, padding: 10, borderRadius: 10, border: `1px solid ${palette.mist}` }} />
+              <textarea placeholder="Note (optional)" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })}
+                style={{ flex: "1 1 100%", minHeight: 64, padding: 10, borderRadius: 10, border: `1px solid ${palette.mist}`, resize: "vertical" }} />
               <button onClick={() => { if (form.title && form.time) { onAddReminder(form); setForm({ title: "", time: "", note: "" }); setEnabled(e => [...e, true]); setShowForm(false); } }} style={{
                 background: palette.pine, color: "#fff", border: "none", borderRadius: 10, padding: "10px 16px", fontWeight: 800, cursor: "pointer",
               }}>Add</button>
@@ -1135,9 +1209,19 @@ function MemoryAssistant({ lang, onBack, reminders, routine, onToggleRoutine, on
       </>}
 
       {tab === "appointment" && (
-        <Card style={{ textAlign: "center", padding: 32, color: palette.inkSoft }}>
-          <Calendar size={30} color={palette.mist} style={{ marginBottom: 10 }} />
-          <div>Upcoming doctor appointments will appear here.</div>
+        <Card>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 800, marginBottom: 12 }}><Calendar size={19} color={palette.pine} /> Doctor Appointments</div>
+          {appointmentsLoading && <div style={{ color: palette.inkSoft }}>Loading appointments...</div>}
+          {appointmentsError && <div role="alert" style={{ color: palette.danger, background: "#FDECEA", borderRadius: 10, padding: 10 }}>{appointmentsError}</div>}
+          {!token && <div style={{ color: palette.inkSoft, fontSize: 14 }}>Sign in to view your saved doctor appointments.</div>}
+          {!appointmentsLoading && !appointmentsError && token && appointments.length === 0 && <div style={{ color: palette.inkSoft, fontSize: 14 }}>No doctor appointments scheduled.</div>}
+          {appointments.map(appointment => (
+            <div key={appointment.id} style={{ padding: "12px 0", borderBottom: `1px solid ${palette.mist}` }}>
+              <div style={{ fontWeight: 800 }}>{appointment.doctor_name}</div>
+              <div style={{ color: palette.inkSoft, fontSize: 13, marginTop: 3 }}>{appointment.clinic} · {new Date(`${appointment.appointment_date}T00:00:00`).toLocaleDateString()} at {appointment.appointment_time}</div>
+              {appointment.notes && <div style={{ fontSize: 13, marginTop: 5 }}>{appointment.notes}</div>}
+            </div>
+          ))}
         </Card>
       )}
 
@@ -1158,7 +1242,7 @@ function MemoryAssistant({ lang, onBack, reminders, routine, onToggleRoutine, on
   );
 }
 
-function HelpVoiceScreen({ lang, onBack }) {
+function HelpVoiceScreen({ lang, onBack, voiceAssist, textToSpeech }) {
   const t = STRINGS[lang];
   const [transcript, setTranscript] = useState("");
   return (
@@ -1166,9 +1250,9 @@ function HelpVoiceScreen({ lang, onBack }) {
       <TopBar title="Voice & Help" onBack={onBack} />
       <Card style={{ marginBottom: 16, textAlign: "center" }}>
         <p style={{ fontWeight: 700, marginBottom: 16 }}>Tap the microphone and speak your answer or question.</p>
-        <VoiceMicButton onResult={setTranscript} listenPrompt="Listening…" />
+        {voiceAssist ? <VoiceMicButton onResult={setTranscript} listenPrompt="Listening…" /> : <div style={{ color: palette.inkSoft, fontSize: 14 }}>Voice assistance is disabled in Settings.</div>}
         {transcript && <div style={{ marginTop: 16, background: palette.paperDeep, borderRadius: 12, padding: 12 }}>You said: "{transcript}"</div>}
-        <div style={{ marginTop: 18 }}><SpeakButton text="Welcome to MindMate. Tap start today's training on the home screen to begin your daily activities." label={`🔊 ${t.readPage}`} /></div>
+        {textToSpeech && <div style={{ marginTop: 18 }}><SpeakButton text="Welcome to MindMate. Tap start today's training on the home screen to begin your daily activities." label={`🔊 ${t.readPage}`} /></div>}
       </Card>
       <Card>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Need help?</div>
@@ -1177,11 +1261,78 @@ function HelpVoiceScreen({ lang, onBack }) {
     </div>
   );
 }
+function ProfileScreen({ account, onBack }) {
+    return (
+        <div style={{ padding: 24, maxWidth: 700, margin: "0 auto" }}>
+              <button
+                      onClick={onBack}
+                              style={{
+                                        border: "none",
+                                                  background: "none",
+                                                            cursor: "pointer",
+                                                                      fontWeight: 700,
+                                                                                marginBottom: 20,
+                                                                                        }}
+                                                                                              >
+                                                                                                      ← Back
+                                                                                                            </button>
 
-function SettingsScreen({ lang, setLang, fontScale, setFontScale, highContrast, setHighContrast, reduceMotion, setReduceMotion, onBack }) {
+                                                                                                                  <Card style={{ marginBottom: 16 }}>
+                                                                                                                          <div style={{ textAlign: "center", marginBottom: 24 }}>
+                                                                                                                                    <div
+                                                                                                                                                style={{
+                                                                                                                                                              width: 80,
+                                                                                                                                                                            height: 80,
+                                                                                                                                                                                          borderRadius: "50%",
+                                                                                                                                                                                                        background: palette.pine,
+                                                                                                                                                                                                                      color: "#fff",
+                                                                                                                                                                                                                                    display: "flex",
+                                                                                                                                                                                                                                                  alignItems: "center",
+                                                                                                                                                                                                                                                                justifyContent: "center",
+                                                                                                                                                                                                                                                                              margin: "0 auto 12px",
+                                                                                                                                                                                                                                                                                            fontSize: 32,
+                                                                                                                                                                                                                                                                                                          fontWeight: 800,
+                                                                                                                                                                                                                                                                                                                      }}
+                                                                                                                                                                                                                                                                                                                                >
+                                                                                                                                                                                                                                                                                                                                            {(account?.name || "U").charAt(0).toUpperCase()}
+                                                                                                                                                                                                                                                                                                                                                      </div>
+
+                                                                                                                                                                                                                                                                                                                                                                <div style={{ fontSize: 22, fontWeight: 800, color: palette.ink }}>
+                                                                                                                                                                                                                                                                                                                                                                            {account?.name || "User"}
+                                                                                                                                                                                                                                                                                                                                                                                      </div>
+
+                                                                                                                                                                                                                                                                                                                                                                                                <div style={{ color: palette.inkSoft, marginTop: 4 }}>
+                                                                                                                                                                                                                                                                                                                                                                                                            {account?.email || "No email available"}
+                                                                                                                                                                                                                                                                                                                                                                                                                      </div>
+                                                                                                                                                                                                                                                                                                                                                                                                                              </div>
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                      <div style={{ padding: 14, borderRadius: 12, background: "#F5F7F6", marginBottom: 10 }}>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                <div style={{ fontSize: 12, color: palette.inkSoft }}>Name</div>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                          <div style={{ fontWeight: 700, marginTop: 4 }}>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                      {account?.name || "Not available"}
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                </div>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        </div>
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                <div style={{ padding: 14, borderRadius: 12, background: "#F5F7F6", marginBottom: 10 }}>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          <div style={{ fontSize: 12, color: palette.inkSoft }}>Email</div>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    <div style={{ fontWeight: 700, marginTop: 4 }}>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                {account?.email || "Not available"}
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          </div>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  </div>
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          <div style={{ padding: 14, borderRadius: 12, background: "#F5F7F6" }}>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    <div style={{ fontSize: 12, color: palette.inkSoft }}>Account Type</div>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              <div style={{ fontWeight: 700, marginTop: 4, textTransform: "capitalize" }}>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          {account?.role || "User"}
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    </div>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            </div>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  </Card>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      </div>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        );
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        }
+
+function SettingsScreen({ lang, setLang, fontScale, setFontScale, highContrast, setHighContrast, reduceMotion, setReduceMotion, voiceAssist, setVoiceAssist, textToSpeech, setTextToSpeech, onBack, onProfile, onChangePassword, onPrivacySecurity }) {
   const t = STRINGS[lang];
-  const [voiceAssist, setVoiceAssist] = useState(true);
-  const [textToSpeech, setTextToSpeech] = useState(true);
   return (
     <div style={{ padding: 24 }}>
       <TopBar title={t.settings} onBack={onBack} />
@@ -1222,11 +1373,11 @@ function SettingsScreen({ lang, setLang, fontScale, setFontScale, highContrast, 
       <Card>
         <div style={{ fontWeight: 800, marginBottom: 6, fontSize: 13, color: palette.inkSoft, textTransform: "uppercase", letterSpacing: 0.4 }}>Account</div>
         {[
-          { icon: User, label: "Profile" },
-          { icon: Lock, label: "Change Password" },
-          { icon: ShieldCheck, label: "Privacy & Security" },
+          { icon: User, label: "Profile", onClick: onProfile },
+          { icon: Lock, label: "Change Password", onClick: onChangePassword },
+          { icon: ShieldCheck, label: "Privacy & Security", onClick: onPrivacySecurity },
         ].map((row, i, arr) => (
-          <button key={row.label} style={{
+          <button key={row.label} onClick={row.onClick} style={{
             width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "12px 2px",
             background: "none", border: "none", cursor: "pointer", textAlign: "left",
             borderBottom: i < arr.length - 1 ? `1px solid ${palette.mist}` : "none",
@@ -1240,6 +1391,131 @@ function SettingsScreen({ lang, setLang, fontScale, setFontScale, highContrast, 
     </div>
   );
 }
+
+function ChangePasswordScreen({ token, onBack }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setError("");
+    setSuccess("");
+    if (newPassword.length < 8) return setError("New password must be at least 8 characters.");
+    if (newPassword !== confirmPassword) return setError("New passwords do not match.");
+    setSaving(true);
+    try {
+      await api("/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword, newPassword }),
+      }, token);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setSuccess("Password changed successfully.");
+    } catch (e) {
+      setError(e.message || "Could not change password.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fieldStyle = {
+    width: "100%", padding: "12px 14px", border: `1px solid ${palette.mist}`,
+    borderRadius: 10, fontSize: 16, color: palette.ink, background: "#fff",
+  };
+
+  return (
+    <div style={{ padding: 24, maxWidth: 560, margin: "0 auto" }}>
+      <TopBar title="Change Password" onBack={onBack} />
+      <Card>
+        <form onSubmit={submit}>
+          {[
+            ["Current Password", currentPassword, setCurrentPassword, "current-password"],
+            ["New Password", newPassword, setNewPassword, "new-password"],
+            ["Confirm New Password", confirmPassword, setConfirmPassword, "new-password"],
+          ].map(([label, value, setter, autocomplete]) => (
+            <label key={label} style={{ display: "block", marginBottom: 16, fontWeight: 700 }}>
+              {label}
+              <input
+                type="password"
+                value={value}
+                onChange={(event) => setter(event.target.value)}
+                autoComplete={autocomplete}
+                required
+                style={{ ...fieldStyle, display: "block", marginTop: 7 }}
+              />
+            </label>
+          ))}
+          {error && <div role="alert" style={{ color: palette.danger, background: "#FDECEA", padding: 10, borderRadius: 10, marginBottom: 14 }}>{error}</div>}
+          {success && <div role="status" style={{ color: palette.ok, background: palette.greenBg, padding: 10, borderRadius: 10, marginBottom: 14 }}>{success}</div>}
+          <div style={{ display: "flex", gap: 10 }}>
+            <button type="submit" disabled={saving} style={{ flex: 1, padding: 12, border: "none", borderRadius: 10, background: palette.pine, color: "#fff", fontWeight: 700, cursor: saving ? "wait" : "pointer", opacity: saving ? 0.7 : 1 }}>
+              {saving ? "Changing..." : "Change Password"}
+            </button>
+            <button type="button" onClick={onBack} style={{ flex: 1, padding: 12, border: `1px solid ${palette.mist}`, borderRadius: 10, background: "#fff", color: palette.ink, fontWeight: 700, cursor: "pointer" }}>
+              Back / Cancel
+            </button>
+          </div>
+        </form>
+      </Card>
+    </div>
+  );
+}
+
+function PrivacySecurityScreen({ account, token, onBack, onLogout }) {
+  const sectionStyle = { display: "flex", gap: 12, alignItems: "flex-start", padding: "14px 0", borderBottom: `1px solid ${palette.mist}` };
+  const iconStyle = { color: palette.pine, flexShrink: 0, marginTop: 2 };
+  return (
+    <div style={{ padding: 24, maxWidth: 650, margin: "0 auto" }}>
+      <TopBar title="Privacy & Security" onBack={onBack} />
+      <Card style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 800, marginBottom: 4 }}>
+          <ShieldCheck size={19} color={palette.pine} /> Account security
+        </div>
+        <div style={{ color: palette.inkSoft, fontSize: 14 }}>Your MindMate account is protected by authenticated access.</div>
+        <div style={sectionStyle}>
+          <User size={19} style={iconStyle} />
+          <div><div style={{ fontWeight: 700 }}>Signed-in account</div><div style={{ color: palette.inkSoft, fontSize: 14, marginTop: 3 }}>{account?.email || account?.name || "Current account"}</div></div>
+        </div>
+        <div style={sectionStyle}>
+          <Lock size={19} style={iconStyle} />
+          <div><div style={{ fontWeight: 700 }}>Login/session security</div><div style={{ color: palette.inkSoft, fontSize: 14, marginTop: 3 }}>{token ? "This device has an active secure session." : "No active session information is available."}</div></div>
+        </div>
+        <div style={{ ...sectionStyle, borderBottom: "none" }}>
+          <Clock size={19} style={iconStyle} />
+          <div><div style={{ fontWeight: 700 }}>Session control</div><div style={{ color: palette.inkSoft, fontSize: 14, marginTop: 3 }}>Use Logout from this device to end this session immediately.</div></div>
+        </div>
+      </Card>
+      <Card style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 800, marginBottom: 4 }}>
+          <Info size={19} color={palette.pine} /> Privacy information
+        </div>
+        <div style={sectionStyle}>
+          <ShieldCheck size={19} style={iconStyle} />
+          <div><div style={{ fontWeight: 700 }}>Data protection</div><div style={{ color: palette.inkSoft, fontSize: 14, marginTop: 3 }}>MindMate uses your authenticated account to associate training activity and reminders with you. Passwords are handled securely by the backend and are never shown here.</div></div>
+        </div>
+        <div style={{ ...sectionStyle, borderBottom: "none" }}>
+          <Eye size={19} style={iconStyle} />
+          <div><div style={{ fontWeight: 700 }}>Privacy by design</div><div style={{ color: palette.inkSoft, fontSize: 14, marginTop: 3 }}>Only the information needed for your account and app features is displayed in this app.</div></div>
+        </div>
+      </Card>
+      <Card>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 800, marginBottom: 8 }}>
+          <LogOut size={19} color={palette.danger} /> Logout from this device
+        </div>
+        <div style={{ color: palette.inkSoft, fontSize: 14, marginBottom: 14 }}>This clears the saved login session on this device and returns you to the login screen.</div>
+        <button onClick={onLogout} style={{ width: "100%", padding: 12, border: "none", borderRadius: 10, background: palette.danger, color: "#fff", fontWeight: 700, cursor: "pointer" }}>
+          Log out securely
+        </button>
+      </Card>
+    </div>
+  );
+}
+
 function ToggleRow({ icon: Icon, label, value, onChange }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1259,11 +1535,11 @@ function ToggleRow({ icon: Icon, label, value, onChange }) {
 }
 
 /* ---------------------------- Caregiver ---------------------------- */
-function CaregiverDashboard({ users, onSelectUser, onBack, alerts }) {
+function CaregiverDashboard({ users, onSelectUser, onBack, alerts, loading, error }) {
   const total = users.length;
   const active = users.filter(u => u.status === "Active").length;
   const completedToday = users.filter(u => u.lastActivity === "Today").length;
-  const avgScore = Math.round(users.reduce((a, u) => a + u.trainingScore, 0) / users.length);
+  const avgScore = total ? Math.round(users.reduce((a, u) => a + u.trainingScore, 0) / total) : 0;
   return (
     <div style={{ padding: 24 }}>
       <TopBar title="Caregiver Dashboard" onBack={onBack} />
@@ -1291,6 +1567,9 @@ function CaregiverDashboard({ users, onSelectUser, onBack, alerts }) {
 
       <Card>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Users</div>
+        {loading && <div style={{ color: palette.inkSoft, padding: "12px 0" }}>Loading users...</div>}
+        {error && <div role="alert" style={{ color: palette.danger, background: "#FDECEA", borderRadius: 10, padding: 10, marginBottom: 10 }}>{error}</div>}
+        {!loading && !error && users.length === 0 && <div style={{ color: palette.inkSoft, padding: "12px 0" }}>No linked users found.</div>}
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 560 }}>
             <thead>
@@ -1301,7 +1580,7 @@ function CaregiverDashboard({ users, onSelectUser, onBack, alerts }) {
               </tr>
             </thead>
             <tbody>
-              {users.map(u => (
+              {!loading && !error && users.map(u => (
                 <tr key={u.id} onClick={() => onSelectUser(u)} style={{ cursor: "pointer" }}
                   onMouseEnter={e => e.currentTarget.style.background = palette.paperDeep}
                   onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
@@ -1348,11 +1627,22 @@ function StatCard({ label, value, icon: Icon }) {
   );
 }
 
-function UserAnalytics({ user, onBack }) {
+function UserAnalytics({ user, onBack, token, loading, error }) {
   const [tab, setTab] = useState("performance");
-  const data = user.memory.map((d, i) => ({ day: d.day, Memory: d.score, Attention: user.attention[i]?.score, Pattern: user.pattern[i]?.score }));
-  const last = (arr) => arr[arr.length - 1].score;
-  const overall = Math.round((last(user.memory) + last(user.attention) + last(user.pattern)) / 3);
+  const gameKeys = ["memory", "objectRecall", "attention", "pattern"];
+  const gameLabels = { memory: "Memory", objectRecall: "Object Recall", attention: "Attention", pattern: "Pattern" };
+  const series = Object.fromEntries(gameKeys.map(key => [key, user[key] || []]));
+  const chartLength = Math.max(1, ...gameKeys.map(key => series[key].length));
+  const data = Array.from({ length: chartLength }, (_, i) => ({
+    day: gameKeys.map(key => series[key][i]?.day).find(Boolean) || `Session ${i + 1}`,
+    Memory: series.memory[i]?.score,
+    ObjectRecall: series.objectRecall[i]?.score,
+    Attention: series.attention[i]?.score,
+    Pattern: series.pattern[i]?.score,
+  }));
+  const last = (arr) => arr[arr.length - 1]?.score ?? 0;
+  const currentScores = gameKeys.map(key => last(series[key])).filter((score, index) => series[gameKeys[index]].length);
+  const overall = currentScores.length ? Math.round(currentScores.reduce((sum, score) => sum + score, 0) / currentScores.length) : 0;
   return (
     <div style={{ padding: 24 }}>
       <TopBar title="User Analytics" onBack={onBack} />
@@ -1371,12 +1661,13 @@ function UserAnalytics({ user, onBack }) {
 
       <Tabs tabs={[["performance", "Performance Overview"], ["history", "Activity History"]]} active={tab} onChange={setTab} />
 
-      {tab === "performance" && <>
+      {loading && <Card style={{ color: palette.inkSoft }}>Loading performance data...</Card>}
+      {error && <Card><div role="alert" style={{ color: palette.danger, background: "#FDECEA", borderRadius: 10, padding: 10 }}>{error}</div></Card>}
+      {!loading && !error && tab === "performance" && <>
         <Card style={{ marginBottom: 16 }}>
+          {(user.sessions || []).length === 0 && <div style={{ color: palette.inkSoft, fontSize: 14, marginBottom: 14 }}>No game sessions recorded for this user yet.</div>}
           <div className="mm-stagger-row" style={{ display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 14 }}>
-            <Ring pct={last(user.memory)} color={palette.green} label="Memory" />
-            <Ring pct={last(user.attention)} color={palette.purple} label="Attention" />
-            <Ring pct={last(user.pattern)} color={palette.blue} label="Pattern" />
+            {gameKeys.map(key => <Ring key={key} pct={last(series[key])} color={key === "memory" ? palette.green : key === "objectRecall" ? palette.marigold : key === "attention" ? palette.purple : palette.blue} label={gameLabels[key]} />)}
             <Ring pct={overall} color={palette.ink} label="Overall Training" />
           </div>
         </Card>
@@ -1390,6 +1681,7 @@ function UserAnalytics({ user, onBack }) {
                 <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
                 <Tooltip /><Legend />
                 <Line type="monotone" dataKey="Memory" stroke={palette.green} strokeWidth={3} dot={false} />
+                <Line type="monotone" dataKey="ObjectRecall" name="Object Recall" stroke={palette.marigold} strokeWidth={3} dot={false} />
                 <Line type="monotone" dataKey="Attention" stroke={palette.purple} strokeWidth={3} dot={false} />
                 <Line type="monotone" dataKey="Pattern" stroke={palette.blue} strokeWidth={3} dot={false} />
               </LineChart>
@@ -1407,20 +1699,142 @@ function UserAnalytics({ user, onBack }) {
         </Card>
       </>}
 
-      {tab === "history" && (
+      {!loading && !error && tab === "history" && (
         <Card style={{ textAlign: "center", padding: 32, color: palette.inkSoft }}>
           <Clock size={30} color={palette.mist} style={{ marginBottom: 10 }} />
-          <div>{user.name}'s detailed session-by-session history will appear here.</div>
+          {(user.sessions || []).length === 0 && <div>{user.name} has no recorded sessions yet.</div>}
+          {(user.sessions || []).map(session => (
+            <div key={session.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${palette.mist}`, textAlign: "left" }}>
+              <span>{session.label}</span><span>{session.score}% · {session.accuracy}% accuracy</span>
+            </div>
+          ))}
         </Card>
       )}
+      <DoctorAppointments user={user} token={token} />
     </div>
   );
 }
 
-function AdminDashboard({ users, allUsers, games, onBack, onViewUser, onDeleteUser }) {
-  const [tab, setTab] = useState("overview");
+function DoctorAppointments({ user, token }) {
+  const emptyForm = { doctorName: "", clinic: "", appointmentDate: "", appointmentTime: "", notes: "" };
+  const [appointments, setAppointments] = useState([]);
+  const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState(null);
+  const [loading, setLoading] = useState(Boolean(token));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  const loadAppointments = useCallback(async () => {
+    if (!token || !user?.id) {
+      setLoading(false);
+      setError("Sign in as a caregiver to manage appointments.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const { appointments: loaded = [] } = await api(`/caregiver/users/${user.id}/appointments`, {}, token);
+      setAppointments(loaded);
+    } catch (e) {
+      setAppointments([]);
+      setError(e.message || "Appointments could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }, [token, user?.id]);
+
+  useEffect(() => { loadAppointments(); }, [loadAppointments]);
+
+  const updateForm = (key, value) => setForm(current => ({ ...current, [key]: value }));
+  const submit = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const path = editingId ? `/caregiver/appointments/${editingId}` : `/caregiver/users/${user.id}/appointments`;
+      const { appointment } = await api(path, { method: editingId ? "PUT" : "POST", body: JSON.stringify(form) }, token);
+      setAppointments(current => editingId ? current.map(item => item.id === editingId ? appointment : item) : [...current, appointment].sort((a, b) => `${a.appointment_date} ${a.appointment_time}`.localeCompare(`${b.appointment_date} ${b.appointment_time}`)));
+      setForm(emptyForm);
+      setEditingId(null);
+      setMessage(editingId ? "Appointment updated." : "Appointment added.");
+    } catch (e) {
+      setError(e.message || "Appointment could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const edit = (appointment) => {
+    setEditingId(appointment.id);
+    setForm({ doctorName: appointment.doctor_name, clinic: appointment.clinic, appointmentDate: String(appointment.appointment_date).slice(0, 10), appointmentTime: appointment.appointment_time, notes: appointment.notes || "" });
+    setMessage("");
+  };
+
+  const remove = async (id) => {
+    if (!window.confirm("Delete this appointment?")) return;
+    setError("");
+    try {
+      await api(`/caregiver/appointments/${id}`, { method: "DELETE" }, token);
+      setAppointments(current => current.filter(item => item.id !== id));
+      if (editingId === id) { setEditingId(null); setForm(emptyForm); }
+      setMessage("Appointment deleted.");
+    } catch (e) {
+      setError(e.message || "Appointment could not be deleted.");
+    }
+  };
+
+  return (
+    <Card style={{ marginTop: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 800 }}><Calendar size={19} color={palette.pine} /> Doctor Appointments</div>
+        <span style={{ color: palette.inkSoft, fontSize: 13 }}>For {user.name}</span>
+      </div>
+      {loading && <div style={{ color: palette.inkSoft, padding: "8px 0" }}>Loading appointments...</div>}
+      {error && <div role="alert" style={{ color: palette.danger, background: "#FDECEA", borderRadius: 10, padding: 10, marginBottom: 10 }}>{error}</div>}
+      {message && <div role="status" style={{ color: palette.ok, background: palette.greenBg, borderRadius: 10, padding: 10, marginBottom: 10 }}>{message}</div>}
+      {!loading && !error && appointments.length === 0 && <div style={{ color: palette.inkSoft, fontSize: 14, marginBottom: 12 }}>No appointments for this elderly user.</div>}
+      {!loading && appointments.map(appointment => (
+        <div key={appointment.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 0", borderBottom: `1px solid ${palette.mist}`, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontWeight: 800 }}>{appointment.doctor_name} · {appointment.clinic}</div>
+            <div style={{ color: palette.inkSoft, fontSize: 13, marginTop: 3 }}>{new Date(`${appointment.appointment_date}T00:00:00`).toLocaleDateString()} at {appointment.appointment_time}</div>
+            {appointment.notes && <div style={{ fontSize: 13, marginTop: 4 }}>{appointment.notes}</div>}
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => edit(appointment)} aria-label="Edit appointment" style={{ display: "flex", alignItems: "center", gap: 4, border: `1px solid ${palette.mist}`, borderRadius: 8, background: "#fff", color: palette.pine, padding: "8px 10px", cursor: "pointer", fontWeight: 700 }}><Pencil size={14} /> Edit</button>
+            <button onClick={() => remove(appointment.id)} aria-label="Delete appointment" style={{ display: "flex", alignItems: "center", gap: 4, border: "none", borderRadius: 8, background: "#FDEAEA", color: palette.danger, padding: "8px 10px", cursor: "pointer", fontWeight: 700 }}><Trash2 size={14} /> Delete</button>
+          </div>
+        </div>
+      ))}
+      <form onSubmit={submit} style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${palette.mist}` }}>
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>{editingId ? "Edit Appointment" : "+ Add Appointment"}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+          {[["doctorName", "Doctor Name", "text"], ["clinic", "Hospital / Clinic", "text"], ["appointmentDate", "Appointment Date", "date"], ["appointmentTime", "Appointment Time", "time"]].map(([key, label, type]) => (
+            <label key={key} style={{ display: "block", fontSize: 13, fontWeight: 700 }}>{label}
+              <input required type={type} value={form[key]} onChange={event => updateForm(key, event.target.value)} style={{ width: "100%", display: "block", marginTop: 5, padding: 10, borderRadius: 9, border: `1px solid ${palette.mist}` }} />
+            </label>
+          ))}
+          <label style={{ gridColumn: "1 / -1", display: "block", fontSize: 13, fontWeight: 700 }}>Reason / Notes
+            <textarea value={form.notes} onChange={event => updateForm("notes", event.target.value)} rows={2} style={{ width: "100%", display: "block", marginTop: 5, padding: 10, borderRadius: 9, border: `1px solid ${palette.mist}`, resize: "vertical" }} />
+          </label>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+          <button disabled={saving || !token} type="submit" style={{ background: palette.pine, color: "#fff", border: "none", borderRadius: 9, padding: "10px 14px", fontWeight: 800, cursor: saving ? "wait" : "pointer", opacity: saving || !token ? 0.6 : 1 }}>{saving ? "Saving..." : editingId ? "Save Changes" : "Add Appointment"}</button>
+          {editingId && <button type="button" onClick={() => { setEditingId(null); setForm(emptyForm); }} style={{ background: "#fff", color: palette.ink, border: `1px solid ${palette.mist}`, borderRadius: 9, padding: "10px 14px", fontWeight: 700, cursor: "pointer" }}>Cancel Edit</button>}
+        </div>
+      </form>
+    </Card>
+  );
+}
+
+function AdminDashboard({ users, allUsers, games, onBack, onViewUser, onDeleteUser, loading, error, demoMode, initialTab = "overview" }) {
+  const [tab, setTab] = useState(initialTab);
   const [busyId, setBusyId] = useState(null);
-  const caregiverCount = allUsers.length ? allUsers.filter(u => u.role === "caregiver").length : DEMO_CAREGIVERS.length;
+  useEffect(() => setTab(initialTab), [initialTab]);
+  const managedUsers = demoMode && !allUsers.length ? users : allUsers;
+  const caregiverCount = demoMode && !allUsers.length ? DEMO_CAREGIVERS.length : allUsers.filter(u => u.role === "caregiver").length;
   const handleDelete = async (u) => {
     if (!window.confirm(`Delete ${u.name} (${u.role})? This permanently removes their account, sessions, and reminders. This cannot be undone.`)) return;
     setBusyId(u.id);
@@ -1445,23 +1859,26 @@ function AdminDashboard({ users, allUsers, games, onBack, onViewUser, onDeleteUs
           <StatCard label="Total Elderly Users" value={users.length} icon={Users} />
           <StatCard label="Registered Caregivers" value={caregiverCount} icon={ShieldCheck} />
           <StatCard label="Game Types" value={games.length} icon={Gamepad2} />
-          <StatCard label="Avg. Platform Score" value={`${Math.round(users.reduce((a, u) => a + u.trainingScore, 0) / users.length)}%`} icon={BarChart3} />
+          <StatCard label="Avg. Platform Score" value={`${users.length ? Math.round(users.reduce((a, u) => a + u.trainingScore, 0) / users.length) : 0}%`} icon={BarChart3} />
         </div>
       )}
       {tab === "users" && (
         <Card>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
             <div style={{ fontWeight: 800 }}>Manage Users &amp; Caregivers</div>
-            <span style={{ fontSize: 12, color: palette.inkSoft }}>{allUsers.length || users.length} total</span>
+            <span style={{ fontSize: 12, color: palette.inkSoft }}>{managedUsers.length} total</span>
           </div>
-          {!allUsers.length && (
+          {demoMode && !allUsers.length && (
             <div style={{ fontSize: 12, color: palette.inkSoft, background: palette.paperDeep, borderRadius: 10, padding: 10, marginBottom: 10 }}>
               Showing demo data — connect a live backend to manage real accounts.
             </div>
           )}
-          {(allUsers.length ? allUsers : users).map(u => (
+          {loading && <div style={{ color: palette.inkSoft, padding: "12px 0" }}>Loading users...</div>}
+          {error && <div role="alert" style={{ color: palette.danger, background: "#FDECEA", borderRadius: 10, padding: 10, marginBottom: 10 }}>{error}</div>}
+          {!loading && !error && managedUsers.length === 0 && <div style={{ color: palette.inkSoft, padding: "12px 0" }}>No users found.</div>}
+          {!loading && !error && managedUsers.map(u => (
             <div key={u.id} style={{
-              display: "flex", alignItems: "center", gap: 10, padding: "10px 0",
+              display: "flex", alignItems: "center", gap: 10, padding: "10px 0", flexWrap: "wrap",
               borderBottom: `1px solid ${palette.mist}`,
             }}>
               <span style={{
@@ -1469,7 +1886,7 @@ function AdminDashboard({ users, allUsers, games, onBack, onViewUser, onDeleteUs
                 background: u.role === "caregiver" ? palette.greenBg : palette.blueBg,
                 color: u.role === "caregiver" ? palette.ok : palette.blue, flexShrink: 0,
               }}>{u.role || "elderly"}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>{u.name}</div>
                 <div style={{ fontSize: 12, color: palette.inkSoft }}>
                   {u.role === "caregiver"
@@ -1534,9 +1951,12 @@ async function api(path, options={}, token){
   if(!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
   return data;
 }
-async function syncOffline(token){
+function normalizeReminder(reminder){
+  return { id: reminder.id, title: reminder.title, time: reminder.reminder_time || reminder.time, note: reminder.note || "" };
+}
+async function syncOffline(token, userId){
   if(!navigator.onLine || !token) return {count:0};
-  const pending=await queuedSessions();
+  const pending=(await queuedSessions()).filter(session => session.userId === userId);
   if(!pending.length) return {count:0};
   const result=await api('/game-sessions/sync',{method:'POST',body:JSON.stringify({sessions:pending})},token);
   await removeQueued(pending.map(x=>x.id));
@@ -1547,14 +1967,13 @@ async function syncOffline(token){
 function AppSidebar({ role, screen, onNav, onLogout }) {
   const items = role === "elderly"
     ? [
-        ["elderlyHome", "Home", Home], ["training", "Training", Brain],
-        ["assistant", "Memory Assistant", ClipboardList], ["progress", "Progress", TrendingUp],
-        ["settings", "Settings", SettingsIcon],
+        ["elderlyHome", "Home", Home], ["training", "Training / Games", Brain],
+        ["progress", "Progress", TrendingUp], ["assistant", "Memory Assistant", ClipboardList],
+        ["assistant", "Reminders", Bell], ["settings", "Settings", SettingsIcon],
       ]
     : role === "caregiver"
-      ? [["caregiverDashboard", "Dashboard", Home], ["caregiverDashboard", "Users", Users], ["caregiverDashboard", "Analytics", BarChart3],
-         ["caregiverDashboard", "Reminders", Bell], ["caregiverDashboard", "Notifications", AlertTriangle], ["settings", "Settings", SettingsIcon]]
-      : [["adminDashboard", "Dashboard", Home], ["adminDashboard", "Users", Users], ["adminDashboard", "Games", Gamepad2], ["settings", "Settings", SettingsIcon]];
+      ? [["caregiverDashboard", "Dashboard", Home], ["caregiverUsers", "Users", Users], ["userAnalytics", "Analytics", BarChart3], ["settings", "Settings", SettingsIcon]]
+      : [["adminDashboard", "Dashboard", Home], ["adminUsers", "Users", Users], ["adminGames", "Games", Gamepad2], ["settings", "Settings", SettingsIcon]];
   return (
     <aside className="mm-sidebar">
       <div className="mm-brand">
@@ -1562,8 +1981,8 @@ function AppSidebar({ role, screen, onNav, onLogout }) {
         <div><strong>MindMate AI</strong><small>Train the Mind.</small></div>
       </div>
       <nav className="mm-nav">
-        {items.map(([target, label, Icon], i) => (
-          <button key={label} className={(screen === target || (target === "caregiverDashboard" && screen === "userAnalytics")) && i === 0 ? "active" : ""} onClick={() => onNav(target)}>
+        {items.map(([target, label, Icon]) => (
+          <button key={label} className={screen === target || (target === "caregiverDashboard" && screen === "caregiverUsers") ? "active" : ""} onClick={() => onNav(target)}>
             <Icon size={18}/><span>{label}</span>
           </button>
         ))}
@@ -1580,39 +1999,68 @@ const GAME_META = [
 ];
 
 export default function MindMateAI() {
-  const [screen, setScreen] = useState("splash");
+  const [token, setToken] = useState(() => localStorage.getItem("mindmate_token") || "");
+  const [screen, setScreen] = useState(() => token ? "authChecking" : "splash");
+  const [authChecking, setAuthChecking] = useState(Boolean(token));
   const [role, setRole] = useState(null);
   const [lang, setLang] = useState("en");
   const [fontScale, setFontScale] = useState(1);
   const [highContrast, setHighContrast] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
+  const [voiceAssist, setVoiceAssist] = useState(true);
+  const [textToSpeech, setTextToSpeech] = useState(true);
   const [netOnline, setNetOnline] = useState(navigator.onLine);
-  const [token, setToken] = useState(() => localStorage.getItem("mindmate_token") || "");
   const [account, setAccount] = useState(() => { try { return JSON.parse(localStorage.getItem("mindmate_user") || "null"); } catch { return null; } });
   const [remoteUsers, setRemoteUsers] = useState([]);
   const [allUsers, setAllUsers] = useState([]);
 
   const [elderly, setElderly] = useState({
-    name: "Ramesh", trainingScore: 78, streak: 5, doneToday: 0,
+    name: "", trainingScore: 0, streak: 0, doneToday: 0,
   });
   const [sessions, setSessions] = useState([]);
   const [difficulties, setDifficulties] = useState({ memory: 2, objectRecall: 2, pattern: 2, attention: 2 });
-  const [recentAcc, setRecentAcc] = useState({ memory: [78], objectRecall: [70], pattern: [72], attention: [75] });
+  const [recentAcc, setRecentAcc] = useState({ memory: [], objectRecall: [], pattern: [], attention: [] });
 
-  const [reminders, setReminders] = useState([
-    { title: "Blood pressure tablet", time: "8:00 AM", note: "Doctor Appointment reminder: 12 Oct, 10:30 AM" },
-  ]);
+  const [reminders, setReminders] = useState([]);
+  const [remindersLoading, setRemindersLoading] = useState(Boolean(token));
+  const [remindersError, setRemindersError] = useState("");
   const [routine, setRoutine] = useState([
-    { label: "Wake up", done: true }, { label: "Breakfast", done: true },
+    { label: "Wake up", done: false }, { label: "Breakfast", done: false },
     { label: "Morning walk", done: false }, { label: "Call family", done: false },
   ]);
 
   const [demoUsers] = useState(() => buildDemoUsers());
   const [selectedUser, setSelectedUser] = useState(null);
+  const [caregiverUsersLoading, setCaregiverUsersLoading] = useState(false);
+  const [caregiverUsersError, setCaregiverUsersError] = useState("");
+  const [adminUsersLoading, setAdminUsersLoading] = useState(false);
+  const [adminUsersError, setAdminUsersError] = useState("");
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState("");
   const [trainingPlan, setTrainingPlan] = useState(null);
   const [activeGame, setActiveGame] = useState(null);
   const [lastResult, setLastResult] = useState(null);
   const [lastAdaptive, setLastAdaptive] = useState(null);
+
+  useEffect(() => {
+    const authenticated = Boolean(token && account?.id);
+    setElderly({ name: authenticated ? account.name : "", trainingScore: 0, streak: 0, doneToday: 0 });
+    setSessions([]);
+    setDifficulties({ memory: 2, objectRecall: 2, pattern: 2, attention: 2 });
+    setRecentAcc({ memory: [], objectRecall: [], pattern: [], attention: [] });
+    setRemoteUsers([]);
+    setAllUsers([]);
+    setSelectedUser(null);
+    setTrainingPlan(null);
+    setActiveGame(null);
+    setLastResult(null);
+    setLastAdaptive(null);
+    setRoutine([
+      { label: "Wake up", done: false }, { label: "Breakfast", done: false },
+      { label: "Morning walk", done: false }, { label: "Call family", done: false },
+    ]);
+    if (!authenticated) setReminders([]);
+  }, [account?.id]);
 
   useEffect(() => {
     const goOffline = () => setNetOnline(false);
@@ -1623,19 +2071,105 @@ export default function MindMateAI() {
   }, []);
 
   useEffect(() => {
-    if (!token) return;
-    api('/auth/me',{},token).then(({user})=>{ setAccount(user); setRole(user.role); if(user.role==='elderly') setElderly(e=>({...e,name:user.name})); }).catch(()=>{ localStorage.removeItem('mindmate_token'); localStorage.removeItem('mindmate_user'); setToken(''); setAccount(null); });
-    syncOffline(token).catch(()=>{});
+    let active = true;
+    if (!token) {
+      setAuthChecking(false);
+      return () => { active = false; };
+    }
+    setAuthChecking(true);
+    api('/auth/me',{},token).then(({user})=>{
+      if (!active) return;
+      setAccount(user);
+      setRole(user.role);
+      setScreen(user.role === 'elderly' ? 'elderlyHome' : user.role === 'caregiver' ? 'caregiverDashboard' : 'adminDashboard');
+      setAuthChecking(false);
+    }).catch(()=>{
+      if (!active) return;
+      localStorage.removeItem('mindmate_token');
+      localStorage.removeItem('mindmate_user');
+      setToken('');
+      setAccount(null);
+      setRole(null);
+      setScreen('roleSelect');
+      setAuthChecking(false);
+    });
+    if (account?.id) syncOffline(token, account.id).catch(()=>{});
+    return () => { active = false; };
   }, [token]);
 
   useEffect(() => {
-    if (!token || !account || !['caregiver','admin'].includes(account.role)) return;
-    api('/caregiver/users',{},token).then(({users})=>setRemoteUsers(users)).catch(()=>{});
+    if (!token || !account?.id || account.role !== "elderly") return undefined;
+    let active = true;
+    api('/me/performance', {}, token).then(({ sessions: loaded = [] }) => {
+      if (!active) return;
+      const mapped = loaded.map(session => ({
+        id: session.id,
+        gameKey: session.game_key,
+        label: GAME_META.find(game => game.key === session.game_key)?.label || session.game_key,
+        score: Number(session.score || 0),
+        accuracy: Number(session.accuracy || 0),
+        date: session.created_at || session.client_created_at,
+      }));
+      setSessions(mapped);
+      if (mapped.length) {
+        const average = Math.round(mapped.reduce((sum, session) => sum + session.score, 0) / mapped.length);
+        setElderly(user => ({ ...user, trainingScore: average, doneToday: mapped.filter(session => new Date(session.date).toDateString() === new Date().toDateString()).length }));
+      }
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [token, account?.id, account?.role]);
+
+  useEffect(() => {
+    if (!token) {
+      setRemindersLoading(false);
+      setRemindersError("");
+      return;
+    }
+    setRemindersLoading(true);
+    setRemindersError("");
+    setReminders([]);
+    api('/reminders',{},token).then(({reminders: loaded = []}) => {
+      setReminders(loaded.map(normalizeReminder));
+      setRemindersLoading(false);
+    }).catch(() => {
+      setReminders([]);
+      setRemindersLoading(false);
+      setRemindersError("Reminders could not be loaded. Try again later.");
+    });
+  }, [token]);
+
+  useEffect(() => {
+    if (!token || !account || !['caregiver','admin'].includes(account.role)) {
+      setCaregiverUsersLoading(false);
+      return;
+    }
+    setCaregiverUsersLoading(true);
+    setCaregiverUsersError("");
+    api('/caregiver/users',{},token).then(({users})=>{
+      setRemoteUsers(users || []);
+      setCaregiverUsersLoading(false);
+    }).catch(()=>{
+      setRemoteUsers([]);
+      setCaregiverUsersLoading(false);
+      setCaregiverUsersError("Users could not be loaded. Try again later.");
+    });
   }, [token, account]);
 
   useEffect(() => {
-    if (!token || account?.role !== 'admin') return;
-    api('/admin/users',{},token).then(({users})=>setAllUsers(users)).catch(()=>{});
+    if (!token || account?.role !== 'admin') {
+      setAdminUsersLoading(false);
+      return;
+    }
+    setAdminUsersLoading(true);
+    setAdminUsersError("");
+    api('/admin/users',{},token).then(({users})=>{
+      setAllUsers(users || []);
+      setAdminUsersLoading(false);
+    }).catch(()=>{
+      setAllUsers([]);
+      setAdminUsersLoading(false);
+      setAdminUsersError("Users could not be loaded. Try again later.");
+    });
   }, [token, account]);
 
   const deleteUser = useCallback(async (userId) => {
@@ -1645,16 +2179,29 @@ export default function MindMateAI() {
   }, [token]);
 
   const viewUserAnalytics = useCallback(async (u) => {
-    if (token && u.id) {
-      try {
-        const x = await api(`/caregiver/users/${u.id}/performance`, {}, token);
-        const grouped = { memory: [], attention: [], pattern: [] };
-        (x.sessions || []).forEach(s => { const k = s.game_key; if (grouped[k]) grouped[k].push({ day: new Date(s.created_at).toLocaleDateString(), score: Number(s.score) }); });
-        const fill = (a) => a.length ? a : Array.from({ length: 7 }, (_, i) => ({ day: `Day ${i + 1}`, score: 0 }));
-        setSelectedUser({ ...u, memory: fill(grouped.memory), attention: fill(grouped.attention), pattern: fill(grouped.pattern), difficulties: { memory: u.level || 1, objectRecall: u.level || 1, pattern: u.level || 1, attention: u.level || 1 } });
-      } catch { setSelectedUser(u); }
-    } else setSelectedUser(u);
+    const grouped = { memory: [], objectRecall: [], attention: [], pattern: [] };
+    const base = { ...u, ...grouped, sessions: [], difficulties: { memory: u.level || 1, objectRecall: u.level || 1, pattern: u.level || 1, attention: u.level || 1 } };
+    setSelectedUser(base);
+    setAnalyticsError("");
+    setAnalyticsLoading(Boolean(token && u.id));
     setScreen("userAnalytics");
+    if (!token || !u.id) return;
+    try {
+      const x = await api(`/caregiver/users/${u.id}/performance`, {}, token);
+      const sessions = (x.sessions || []).map(s => ({
+        id: s.id,
+        gameKey: s.game_key,
+        label: { memory: "Memory Match", objectRecall: "Object Recall", attention: "Attention Game", pattern: "Pattern Recognition" }[s.game_key] || s.game_key,
+        score: Number(s.score || 0), accuracy: Number(s.accuracy || 0),
+        date: s.created_at || s.client_created_at,
+      }));
+      sessions.forEach(s => { if (grouped[s.gameKey]) grouped[s.gameKey].push({ day: new Date(s.date).toLocaleDateString(), score: s.score }); });
+      setSelectedUser({ ...base, ...grouped, sessions });
+    } catch {
+      setAnalyticsError("Performance data could not be loaded. Try again later.");
+    } finally {
+      setAnalyticsLoading(false);
+    }
   }, [token]);
 
   const alerts = useMemo(() => {
@@ -1679,14 +2226,15 @@ export default function MindMateAI() {
     setRecentAcc(r => ({ ...r, [gameKey]: [...r[gameKey], raw.accuracy].slice(-5) }));
     const sessionId = crypto.randomUUID();
     const session = { id: sessionId, gameKey, score, accuracy: raw.accuracy, responseTime: raw.responseTime, difficultyBefore: currentLevel, difficultyAfter: adaptive.nextLevel, totalQuestions: raw.totalQuestions, correctAnswers: raw.correct, clientCreatedAt: new Date().toISOString() };
-    setSessions(s => [...s, { label: GAME_META.find(g => g.key === gameKey)?.label || gameKey, score, date: session.clientCreatedAt }]);
-    if (token && navigator.onLine) api('/game-sessions',{method:'POST',body:JSON.stringify(session)},token).catch(()=>queueSession(session));
-    else queueSession(session).catch(()=>{});
+    setSessions(s => [...s, { id: sessionId, gameKey, label: GAME_META.find(g => g.key === gameKey)?.label || gameKey, score, accuracy: raw.accuracy, date: session.clientCreatedAt }]);
+    const ownedSession = { ...session, userId: account?.id };
+    if (token && navigator.onLine) api('/game-sessions',{method:'POST',body:JSON.stringify(session)},token).catch(()=>queueSession(ownedSession));
+    else if (account?.id) queueSession(ownedSession).catch(()=>{});
     setElderly(e => ({ ...e, doneToday: Math.min(3, e.doneToday + 1), trainingScore: Math.round((e.trainingScore * 4 + score) / 5) }));
     setLastResult({ ...raw, score });
     setLastAdaptive({ ...adaptive, prevLevel: currentLevel });
     setScreen("result");
-  }, [activeGame, difficulties, recentAcc, lang, token]);
+  }, [activeGame, difficulties, recentAcc, lang, token, account?.id]);
 
   const loadDemoElderly = () => {
     setElderly({ name: "Ramesh", trainingScore: 78, streak: 5, doneToday: 0 });
@@ -1697,12 +2245,42 @@ export default function MindMateAI() {
   const contrastStyle = highContrast ? {
     background: "#000", color: "#FFF700",
   } : { background: palette.paper, color: palette.ink };
-  const isPublic = ["splash", "roleSelect", "login"].includes(screen);
+  const isPublic = ["splash", "authChecking", "roleSelect", "login"].includes(screen);
   const isElderlyLoggedIn = role === "elderly" && !isPublic;
   const doLogout = () => { localStorage.removeItem("mindmate_token"); localStorage.removeItem("mindmate_user"); setToken(""); setAccount(null); setRole(null); setScreen("roleSelect"); };
+  const handleSidebarNav = (target) => {
+    if (role === "caregiver" && target === "userAnalytics") {
+      const users = token ? remoteUsers : demoUsers;
+      if (selectedUser) return setScreen("userAnalytics");
+      if (users[0]) return viewUserAnalytics(users[0]);
+      return setScreen("caregiverUsers");
+    }
+    if (role === "admin" && !["adminDashboard", "adminUsers", "adminGames", "settings"].includes(target)) return;
+    if (role === "caregiver" && !["caregiverDashboard", "caregiverUsers", "userAnalytics", "settings"].includes(target)) return;
+    if (role === "elderly" && !["elderlyHome", "training", "progress", "assistant", "settings"].includes(target)) return;
+    setScreen(target);
+  };
+  const handleAddReminder = async (form) => {
+    const temporary = { id: `local-${crypto.randomUUID()}`, title: form.title, time: form.time, note: form.note || "" };
+    setReminders(r => [temporary, ...r]);
+    if (!token || !navigator.onLine) return;
+    try {
+      const { reminder } = await api("/reminders", { method: "POST", body: JSON.stringify({ title: form.title, reminderTime: form.time, note: form.note || "" }) }, token);
+      setReminders(r => r.map(item => item.id === temporary.id ? normalizeReminder(reminder) : item));
+    } catch {
+      setReminders(r => r.filter(item => item.id !== temporary.id));
+    }
+  };
+  const handleDeleteReminder = async (id) => {
+    if (token && navigator.onLine && id && !id.startsWith("local-")) {
+      try { await api(`/reminders/${id}`, { method: "DELETE" }, token); }
+      catch { return; }
+    }
+    setReminders(r => r.filter(item => item.id !== id));
+  };
 
   return (
-    <div className="mindmate-app" style={{
+    <div className={`mindmate-app${isElderlyLoggedIn ? " mm-elderly-shell" : ""}`} style={{
       fontFamily: "'Atkinson Hyperlegible','Segoe UI',sans-serif",
       fontSize: 16 * fontScale, ...contrastStyle,
       transition: reduceMotion ? "none" : "background .2s ease",
@@ -1724,6 +2302,8 @@ export default function MindMateAI() {
       )}
 
       {screen === "splash" && <Splash onDone={() => setScreen("roleSelect")} />}
+
+      {screen === "authChecking" && <div style={{ minHeight: 300, display: "grid", placeItems: "center", padding: 24, color: palette.inkSoft, fontWeight: 700 }}>Restoring your session...</div>}
 
       {screen === "roleSelect" && <RoleSelect onSelect={(r) => { setRole(r); setScreen("login"); }} />}
 
@@ -1754,6 +2334,9 @@ export default function MindMateAI() {
       )}
       </div>
       ) : isElderlyLoggedIn ? (
+      <>
+      <AppSidebar role={role} screen={screen} onNav={handleSidebarNav} onLogout={doLogout} />
+      <main className="mm-content mm-elderly-content" style={{ padding: 0 }}>
       <div className="mm-public-content mm-phone-frame">
       {!netOnline && (
         <div style={{ background: "#FDECEA", color: palette.danger, padding: "8px 16px", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
@@ -1799,29 +2382,44 @@ export default function MindMateAI() {
       )}
 
       {screen === "progress" && (
-        <ProgressScreen lang={lang} user={demoUsers[0]} sessions={sessions} onBack={() => setScreen("elderlyHome")} />
+        <ProgressScreen lang={lang} demoUser={token ? null : demoUsers[0]} token={token} sessions={sessions} onBack={() => setScreen("elderlyHome")} />
       )}
 
       {screen === "assistant" && (
-        <MemoryAssistant lang={lang} onBack={() => setScreen("elderlyHome")}
+        <MemoryAssistant lang={lang} token={token} onBack={() => setScreen("elderlyHome")}
           reminders={reminders} routine={routine}
+          remindersLoading={remindersLoading} remindersError={remindersError}
           onToggleRoutine={(i) => setRoutine(r => r.map((x, idx) => idx === i ? { ...x, done: !x.done } : x))}
-          onAddReminder={(f) => { const local={title:f.title,time:f.time,note:"Custom reminder"}; setReminders(r=>[...r,local]); if(token && navigator.onLine) api("/reminders",{method:"POST",body:JSON.stringify({title:f.title,reminderTime:f.time,note:"Custom reminder"})},token).catch(()=>{}); }} />
+          onAddReminder={handleAddReminder} onDeleteReminder={handleDeleteReminder} />
       )}
 
-      {screen === "help" && <HelpVoiceScreen lang={lang} onBack={() => setScreen("elderlyHome")} />}
+      {screen === "help" && <HelpVoiceScreen lang={lang} voiceAssist={voiceAssist} textToSpeech={textToSpeech} onBack={() => setScreen("elderlyHome")} />}
 
       {screen === "settings" && (
         <SettingsScreen lang={lang} setLang={setLang} fontScale={fontScale} setFontScale={setFontScale}
           highContrast={highContrast} setHighContrast={setHighContrast}
           reduceMotion={reduceMotion} setReduceMotion={setReduceMotion}
-          onBack={() => setScreen("elderlyHome")} />
-      )}
+          voiceAssist={voiceAssist} setVoiceAssist={setVoiceAssist}
+          textToSpeech={textToSpeech} setTextToSpeech={setTextToSpeech}
+            onBack={() => setScreen("elderlyHome")} onProfile={() => setScreen("profile")}
+            onChangePassword={() => setScreen("changePassword")}
+            onPrivacySecurity={() => setScreen("privacySecurity")} />
+          )}
 
-      {["elderlyHome", "training", "gameSelection", "playing", "result", "progress", "assistant", "help", "settings"].includes(screen) && (
+          {screen === "profile" && <ProfileScreen account={account} onBack={() => setScreen("settings")} />}
+
+        {screen === "changePassword" && (
+          <ChangePasswordScreen token={token} onBack={() => setScreen("settings")} />
+        )}
+
+        {screen === "privacySecurity" && (
+          <PrivacySecurityScreen account={account} token={token} onBack={() => setScreen("settings")} onLogout={doLogout} />
+        )}
+
+        {["elderlyHome", "training", "gameSelection", "playing", "result", "progress", "assistant", "help", "settings", "profile", "changePassword", "privacySecurity"].includes(screen) && (
         <div className="mm-elderly-nav" style={{
           background: "#fff", borderTop: `1px solid ${palette.mist}`,
-          display: "flex", justifyContent: "space-around", padding: "10px 0",
+          display: "flex", justifyContent: "space-around", padding: "6px 12px",
         }}>
           <NavIcon icon={Home} active={screen === "elderlyHome"} onClick={() => setScreen("elderlyHome")} label={t.elderlyHome} />
           <NavIcon icon={ClipboardList} active={screen === "assistant"} onClick={() => setScreen("assistant")} label={t.memoryAssistant.split(" ")[0]} />
@@ -1830,9 +2428,11 @@ export default function MindMateAI() {
         </div>
       )}
       </div>
+      </main>
+      </>
       ) : (
       <>
-      <AppSidebar role={role} screen={screen} onNav={(target) => setScreen(target)} onLogout={doLogout} />
+      <AppSidebar role={role} screen={screen} onNav={handleSidebarNav} onLogout={doLogout} />
       <main className="mm-content" style={{ padding: 0 }}>
       {!netOnline && (
         <div style={{ background: "#FDECEA", color: palette.danger, padding: "8px 16px", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
@@ -1844,31 +2444,47 @@ export default function MindMateAI() {
         <SettingsScreen lang={lang} setLang={setLang} fontScale={fontScale} setFontScale={setFontScale}
           highContrast={highContrast} setHighContrast={setHighContrast}
           reduceMotion={reduceMotion} setReduceMotion={setReduceMotion}
-          onBack={() => setScreen(role === "caregiver" ? "caregiverDashboard" : "adminDashboard")} />
-      )}
+          voiceAssist={voiceAssist} setVoiceAssist={setVoiceAssist}
+          textToSpeech={textToSpeech} setTextToSpeech={setTextToSpeech}
+          onBack={() => setScreen(role === "caregiver" ? "caregiverDashboard" : "adminDashboard")}
+            onProfile={() => setScreen("profile")}
+            onChangePassword={() => setScreen("changePassword")}
+            onPrivacySecurity={() => setScreen("privacySecurity")} />
+          )}
 
-      {screen === "caregiverDashboard" && (
-        <CaregiverDashboard users={remoteUsers.length ? remoteUsers.map(u => ({...u, trainingScore:Number(u.training_score||0), accuracy:Number(u.accuracy||0), level:Number(u.level||1), status:u.last_activity ? "Active" : "Inactive", lastActivity:u.last_activity ? new Date(u.last_activity).toLocaleDateString() : "Never"})) : demoUsers} alerts={alerts}
+          {screen === "profile" && <ProfileScreen account={account} onBack={() => setScreen("settings")} />}
+
+        {screen === "changePassword" && (
+          <ChangePasswordScreen token={token} onBack={() => setScreen("settings")} />
+        )}
+
+        {screen === "privacySecurity" && (
+          <PrivacySecurityScreen account={account} token={token} onBack={() => setScreen("settings")} onLogout={doLogout} />
+        )}
+
+          {["caregiverDashboard", "caregiverUsers"].includes(screen) && role === "caregiver" && (
+            <CaregiverDashboard users={token ? remoteUsers.map(u => ({...u, trainingScore:Number(u.training_score||0), accuracy:Number(u.accuracy||0), level:Number(u.level||1), status:u.last_activity ? "Active" : "Inactive", lastActivity:u.last_activity && new Date(u.last_activity).toDateString() === new Date().toDateString() ? "Today" : u.last_activity ? new Date(u.last_activity).toLocaleDateString() : "Never"})) : demoUsers} alerts={token ? [] : alerts} loading={token && caregiverUsersLoading} error={token ? caregiverUsersError : ""}
           onBack={() => setScreen("roleSelect")}
           onSelectUser={viewUserAnalytics} />
       )}
 
-      {screen === "userAnalytics" && selectedUser && (
-        <UserAnalytics user={selectedUser} onBack={() => setScreen(role === "admin" ? "adminDashboard" : "caregiverDashboard")} />
+          {screen === "userAnalytics" && selectedUser && ["caregiver", "admin"].includes(role) && (
+            <UserAnalytics user={selectedUser} token={token} loading={analyticsLoading} error={analyticsError} onBack={() => setScreen(role === "admin" ? "adminDashboard" : "caregiverDashboard")} />
       )}
 
-      {screen === "adminDashboard" && (
+          {["adminDashboard", "adminUsers", "adminGames"].includes(screen) && role === "admin" && (
         <AdminDashboard
-          users={remoteUsers.length ? remoteUsers.map(u => ({...u, trainingScore:Number(u.training_score||0), level:1, language:u.language})) : demoUsers}
+          users={token ? allUsers.filter(u => u.role === "elderly").map(u => ({...u, trainingScore:Number(u.training_score||0), level:Number(u.level||1), language:u.language})) : demoUsers}
           allUsers={allUsers.map(u => ({...u, trainingScore:Number(u.training_score||0), accuracy:Number(u.accuracy||0), level:Number(u.level||1)}))}
-          games={GAME_META} onBack={() => setScreen("roleSelect")}
+          loading={token && adminUsersLoading} error={token ? adminUsersError : ""} demoMode={!token}
+          games={GAME_META} initialTab={screen === "adminUsers" ? "users" : screen === "adminGames" ? "games" : "overview"} onBack={() => setScreen("roleSelect")}
           onViewUser={viewUserAnalytics} onDeleteUser={deleteUser} />
       )}
 
-      {["caregiverDashboard", "userAnalytics", "adminDashboard"].includes(screen) && (
+      {["caregiverDashboard", "caregiverUsers", "userAnalytics", "adminDashboard", "adminUsers", "adminGames"].includes(screen) && (
         <div className="mm-mobile-nav" style={{
           background: "#fff", borderTop: `1px solid ${palette.mist}`,
-          display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 18px",
+          display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 12px",
         }}>
           <span style={{ fontSize: 12, color: palette.inkSoft }}>SIH26003 · MindMate AI</span>
           <button onClick={() => setScreen("settings")} style={{ background: "none", border: "none", cursor: "pointer" }}>

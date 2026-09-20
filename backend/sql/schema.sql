@@ -46,3 +46,17 @@ CREATE TABLE IF NOT EXISTS reminders (
 
 CREATE INDEX IF NOT EXISTS idx_game_sessions_user_date ON game_sessions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_reminders_user ON reminders(user_id);
+
+CREATE TABLE IF NOT EXISTS appointments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  elderly_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  doctor_name VARCHAR(180) NOT NULL,
+  clinic VARCHAR(180) NOT NULL,
+  appointment_date DATE NOT NULL,
+  appointment_time VARCHAR(20) NOT NULL,
+  notes TEXT DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_appointments_elderly_date ON appointments(elderly_id, appointment_date, appointment_time);

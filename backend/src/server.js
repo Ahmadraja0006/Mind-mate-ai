@@ -65,6 +65,20 @@ app.get('/api/auth/me',auth,async(req,res)=>{
   res.json({user:safeUser(rows[0])});
 });
 
+app.post('/api/auth/change-password',auth,async(req,res)=>{
+  try {
+    const {currentPassword,newPassword}=req.body;
+    if(!currentPassword||!newPassword) return res.status(400).json({error:'Current and new passwords are required'});
+    if(newPassword.length<8) return res.status(400).json({error:'Password must be at least 8 characters'});
+    const {rows}=await pool.query('SELECT password_hash FROM users WHERE id=$1',[req.auth.sub]);
+    if(!rows.length) return res.status(404).json({error:'User not found'});
+    if(!(await bcrypt.compare(currentPassword,rows[0].password_hash))) return res.status(401).json({error:'Current password is incorrect'});
+    const hash=await bcrypt.hash(newPassword,12);
+    await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2',[hash,req.auth.sub]);
+    res.json({ok:true});
+  } catch(e){ console.error(e); res.status(500).json({error:'Could not change password'}); }
+});
+
 app.get('/api/games',auth,(_req,res)=>res.json({games:[
   {key:'memory',label:'Memory Match'},
   {key:'objectRecall',label:'Object Recall'},
@@ -112,6 +126,11 @@ app.post('/api/reminders',auth,async(req,res)=>{
   res.status(201).json({reminder:rows[0]});
 });
 app.get('/api/reminders',auth,async(req,res)=>{ const {rows}=await pool.query('SELECT * FROM reminders WHERE user_id=$1 ORDER BY created_at DESC',[req.auth.sub]); res.json({reminders:rows}); });
+app.delete('/api/reminders/:id',auth,async(req,res)=>{
+  const {rows}=await pool.query('DELETE FROM reminders WHERE id=$1 AND user_id=$2 RETURNING id',[req.params.id,req.auth.sub]);
+  if(!rows.length) return res.status(404).json({error:'Reminder not found'});
+  res.json({ok:true,id:rows[0].id});
+});
 
 app.get('/api/caregiver/users',auth,roles('caregiver','admin'),async(req,res)=>{
   const sql=req.auth.role==='admin'
@@ -129,6 +148,50 @@ app.get('/api/caregiver/users/:id/performance',auth,roles('caregiver','admin'),a
   if(!rows.length) return res.status(404).json({error:'User not found'});
   const sessions=await pool.query('SELECT * FROM game_sessions WHERE user_id=$1 ORDER BY created_at ASC',[req.params.id]);
   res.json({user:safeUser(rows[0]),sessions:sessions.rows});
+});
+
+async function canManageElderly(req, elderlyId){
+  if(req.auth.role==='admin') return true;
+  const link=await pool.query('SELECT 1 FROM caregiver_links WHERE caregiver_id=$1 AND elderly_id=$2',[req.auth.sub,elderlyId]);
+  return Boolean(link.rowCount);
+}
+async function getElderlyUser(elderlyId){
+  const {rows}=await pool.query('SELECT id,name FROM users WHERE id=$1 AND role=\'elderly\'',[elderlyId]);
+  return rows[0] || null;
+}
+app.get('/api/caregiver/users/:id/appointments',auth,roles('caregiver','admin'),async(req,res)=>{
+  if(!await canManageElderly(req,req.params.id)) return res.status(403).json({error:'Not authorized for this user'});
+  if(!await getElderlyUser(req.params.id)) return res.status(404).json({error:'User not found'});
+  const {rows}=await pool.query('SELECT * FROM appointments WHERE elderly_id=$1 ORDER BY appointment_date ASC, appointment_time ASC',[req.params.id]);
+  res.json({appointments:rows});
+});
+app.get('/api/appointments',auth,roles('elderly'),async(req,res)=>{
+  const {rows}=await pool.query('SELECT * FROM appointments WHERE elderly_id=$1 ORDER BY appointment_date ASC, appointment_time ASC',[req.auth.sub]);
+  res.json({appointments:rows});
+});
+app.post('/api/caregiver/users/:id/appointments',auth,roles('caregiver','admin'),async(req,res)=>{
+  if(!await canManageElderly(req,req.params.id)) return res.status(403).json({error:'Not authorized for this user'});
+  if(!await getElderlyUser(req.params.id)) return res.status(404).json({error:'User not found'});
+  const {doctorName,clinic,appointmentDate,appointmentTime,notes=''}=req.body;
+  if(!doctorName||!clinic||!appointmentDate||!appointmentTime) return res.status(400).json({error:'Doctor name, clinic, date and time are required'});
+  const {rows}=await pool.query('INSERT INTO appointments(elderly_id,doctor_name,clinic,appointment_date,appointment_time,notes) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[req.params.id,doctorName.trim(),clinic.trim(),appointmentDate,appointmentTime,notes]);
+  res.status(201).json({appointment:rows[0]});
+});
+app.put('/api/caregiver/appointments/:id',auth,roles('caregiver','admin'),async(req,res)=>{
+  const existing=await pool.query('SELECT elderly_id FROM appointments WHERE id=$1',[req.params.id]);
+  if(!existing.rowCount) return res.status(404).json({error:'Appointment not found'});
+  if(!await canManageElderly(req,existing.rows[0].elderly_id)) return res.status(403).json({error:'Not authorized for this user'});
+  const {doctorName,clinic,appointmentDate,appointmentTime,notes=''}=req.body;
+  if(!doctorName||!clinic||!appointmentDate||!appointmentTime) return res.status(400).json({error:'Doctor name, clinic, date and time are required'});
+  const {rows}=await pool.query('UPDATE appointments SET doctor_name=$1,clinic=$2,appointment_date=$3,appointment_time=$4,notes=$5,updated_at=NOW() WHERE id=$6 RETURNING *',[doctorName.trim(),clinic.trim(),appointmentDate,appointmentTime,notes,req.params.id]);
+  res.json({appointment:rows[0]});
+});
+app.delete('/api/caregiver/appointments/:id',auth,roles('caregiver','admin'),async(req,res)=>{
+  const existing=await pool.query('SELECT elderly_id FROM appointments WHERE id=$1',[req.params.id]);
+  if(!existing.rowCount) return res.status(404).json({error:'Appointment not found'});
+  if(!await canManageElderly(req,existing.rows[0].elderly_id)) return res.status(403).json({error:'Not authorized for this user'});
+  await pool.query('DELETE FROM appointments WHERE id=$1',[req.params.id]);
+  res.json({ok:true,id:req.params.id});
 });
 
 app.get('/api/admin/users',auth,roles('admin'),async(req,res)=>{
