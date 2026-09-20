@@ -16,6 +16,7 @@ const pool = new Pool({
 const allowedOrigins = [...new Set([
   ...(process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',').map(s=>s.trim()),
   'http://localhost',
+  'https://localhost',
 ])];
 app.use(cors({ origin(origin, cb){ if(!origin || allowedOrigins.includes(origin)) return cb(null,true); cb(new Error('CORS origin not allowed')); } }));
 app.use(express.json({ limit:'1mb' }));
