@@ -1520,7 +1520,7 @@ function AdminDashboard({ users, allUsers, games, onBack, onViewUser, onDeleteUs
 }
 
 /* ---------------------------- API + offline sync ---------------------------- */
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+const API_URL = import.meta.env.VITE_API_URL || "https://mind-mate-ai-sxj7.onrender.com/api";
 const SYNC_DB = "mindmate-offline";
 async function offlineDB(){ return openDB(SYNC_DB,1,{upgrade(db){ if(!db.objectStoreNames.contains("sessions")) db.createObjectStore("sessions",{keyPath:"id"}); }}); }
 async function queueSession(session){ const db=await offlineDB(); await db.put("sessions",session); }

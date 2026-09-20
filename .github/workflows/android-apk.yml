@@ -40,9 +40,27 @@ jobs:
           VITE_API_URL: https://mind-mate-ai-sxj7.onrender.com/api
         run: npm run build
 
+      - name: Verify production API URL
+        working-directory: frontend
+        run: |
+          grep -R -F 'https://mind-mate-ai-sxj7.onrender.com/api' dist
+          if grep -R -E 'localhost|127\.0\.0\.1|codespaces|[A-Za-z0-9-]+\.app\.github\.dev' dist; then
+            echo 'Production bundle contains a local or Codespaces URL.'
+            exit 1
+          fi
+
       - name: Sync Capacitor
         working-directory: frontend
         run: npx --yes @capacitor/cli sync android
+
+      - name: Verify synced Android assets
+        working-directory: frontend
+        run: |
+          grep -R -F 'https://mind-mate-ai-sxj7.onrender.com/api' android/app/src/main/assets/public
+          if grep -R -E 'localhost|127\.0\.0\.1|codespaces|[A-Za-z0-9-]+\.app\.github\.dev' android/app/src/main/assets/public; then
+            echo 'Synced Android assets contain a local or Codespaces URL.'
+            exit 1
+          fi
 
       - name: Build APK
         working-directory: frontend/android
