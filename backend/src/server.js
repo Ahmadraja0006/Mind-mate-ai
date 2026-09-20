@@ -13,7 +13,10 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "") ? false : { rejectUnauthorized: false },
 });
-const allowedOrigins = (process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',').map(s=>s.trim());
+const allowedOrigins = [...new Set([
+  ...(process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',').map(s=>s.trim()),
+  'http://localhost',
+])];
 app.use(cors({ origin(origin, cb){ if(!origin || allowedOrigins.includes(origin)) return cb(null,true); cb(new Error('CORS origin not allowed')); } }));
 app.use(express.json({ limit:'1mb' }));
 

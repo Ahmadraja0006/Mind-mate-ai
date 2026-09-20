@@ -36,6 +36,8 @@ jobs:
 
       - name: Build frontend
         working-directory: frontend
+        env:
+          VITE_API_URL: https://mind-mate-ai-sxj7.onrender.com/api
         run: npm run build
 
       - name: Sync Capacitor
