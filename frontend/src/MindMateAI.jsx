@@ -617,7 +617,7 @@ function AttentionGame({ level, lang, onComplete }) {
 function Splash({ onDone }) {
   return (
     <div className="mm-splash" style={{
-      minHeight: 560, display: "flex", flexDirection: "column", alignItems: "center",
+      display: "flex", flexDirection: "column", alignItems: "center",
       justifyContent: "center", background: `linear-gradient(160deg, ${palette.pine} 0%, #0B7268 60%, #0A5F57 100%)`,
       color: "#fff", gap: 14, borderRadius: 28, padding: 32, position: "relative", overflow: "hidden",
     }}>
