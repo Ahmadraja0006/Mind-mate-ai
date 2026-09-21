@@ -30,6 +30,8 @@ function auth(req,res,next){
 }
 function roles(...allowed){ return (req,res,next)=> allowed.includes(req.auth.role) ? next() : res.status(403).json({error:'Forbidden'}); }
 function safeUser(r){ return {id:r.id,name:r.name,email:r.email,role:r.role,age:r.age,language:r.language}; }
+function hashInvite(code){ return crypto.createHash('sha256').update(code).digest('hex'); }
+function inviteExpiry(){ return new Date(Date.now()+10*60*1000); }
 
 app.get('/api/health', async (_req,res)=>{
   try { await pool.query('SELECT 1'); res.json({ok:true, database:'connected'}); }
@@ -132,16 +134,70 @@ app.delete('/api/reminders/:id',auth,async(req,res)=>{
   res.json({ok:true,id:rows[0].id});
 });
 
+app.post('/api/caregiver/invite',auth,roles('elderly'),async(req,res)=>{
+  try {
+    const code=String(crypto.randomInt(100000,1000000));
+    const expiresAt=inviteExpiry();
+    await pool.query('UPDATE caregiver_invites SET revoked_at=NOW() WHERE elderly_id=$1 AND used_at IS NULL AND revoked_at IS NULL',[req.auth.sub]);
+    await pool.query('INSERT INTO caregiver_invites(elderly_id,code_hash,expires_at) VALUES($1,$2,$3)',[req.auth.sub,hashInvite(code),expiresAt]);
+    res.status(201).json({code,expiresAt});
+  } catch(e){ console.error(e); res.status(500).json({error:'Could not create caregiver invite'}); }
+});
+
+app.post('/api/caregiver/connect',auth,roles('caregiver'),async(req,res)=>{
+  const code=String(req.body.code||'').trim();
+  if(!/^\d{6}$/.test(code)) return res.status(400).json({error:'Enter a valid 6-digit caregiver code'});
+  const client=await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const invite=await client.query('SELECT id,elderly_id,expires_at FROM caregiver_invites WHERE code_hash=$1 AND used_at IS NULL AND revoked_at IS NULL FOR UPDATE',[hashInvite(code)]);
+    if(!invite.rowCount || new Date(invite.rows[0].expires_at)<=new Date()) { await client.query('ROLLBACK'); return res.status(400).json({error:'This caregiver code is invalid or expired'}); }
+    const {elderly_id:elderlyId}=invite.rows[0];
+    const existing=await client.query('SELECT id,status FROM caregiver_links WHERE caregiver_id=$1 AND elderly_id=$2',[req.auth.sub,elderlyId]);
+    if(existing.rowCount && existing.rows[0].status==='active') { await client.query('ROLLBACK'); return res.status(409).json({error:'You are already linked to this user'}); }
+    if(existing.rowCount && existing.rows[0].status==='pending') { await client.query('ROLLBACK'); return res.status(409).json({error:'A connection request is already pending'}); }
+    if(existing.rowCount) await client.query("UPDATE caregiver_links SET status='pending',updated_at=NOW(),created_at=NOW() WHERE id=$1",[existing.rows[0].id]);
+    else await client.query("INSERT INTO caregiver_links(caregiver_id,elderly_id,status) VALUES($1,$2,'pending')",[req.auth.sub,elderlyId]);
+    await client.query('UPDATE caregiver_invites SET used_at=NOW() WHERE id=$1',[invite.rows[0].id]);
+    await client.query('COMMIT');
+    res.status(201).json({status:'pending'});
+  } catch(e){ await client.query('ROLLBACK'); console.error(e); res.status(500).json({error:'Could not create connection request'}); }
+  finally{ client.release(); }
+});
+
+app.get('/api/caregiver',auth,roles('elderly','caregiver'),async(req,res)=>{
+  const elderly=req.auth.role==='elderly';
+  const {rows}=await pool.query(`SELECT l.id,l.status,l.created_at,l.updated_at,u.id AS user_id,u.name,u.email,u.role FROM caregiver_links l JOIN users u ON u.id=${elderly?'l.caregiver_id':'l.elderly_id'} WHERE ${elderly?'l.elderly_id':'l.caregiver_id'}=$1 ORDER BY l.updated_at DESC`,[req.auth.sub]);
+  res.json({links:rows});
+});
+
+app.post('/api/caregiver/requests/:id/accept',auth,roles('elderly'),async(req,res)=>{
+  const {rows}=await pool.query("UPDATE caregiver_links SET status='active',updated_at=NOW() WHERE id=$1 AND elderly_id=$2 AND status='pending' RETURNING id",[req.params.id,req.auth.sub]);
+  if(!rows.length) return res.status(404).json({error:'Pending caregiver request not found'});
+  res.json({ok:true,status:'active'});
+});
+app.post('/api/caregiver/requests/:id/reject',auth,roles('elderly'),async(req,res)=>{
+  const {rows}=await pool.query("UPDATE caregiver_links SET status='rejected',updated_at=NOW() WHERE id=$1 AND elderly_id=$2 AND status='pending' RETURNING id",[req.params.id,req.auth.sub]);
+  if(!rows.length) return res.status(404).json({error:'Pending caregiver request not found'});
+  res.json({ok:true,status:'rejected'});
+});
+app.delete('/api/caregiver/:id',auth,roles('elderly','caregiver'),async(req,res)=>{
+  const field=req.auth.role==='elderly'?'elderly_id':'caregiver_id';
+  const {rows}=await pool.query(`UPDATE caregiver_links SET status='revoked',updated_at=NOW() WHERE id=$1 AND ${field}=$2 AND status IN ('pending','active') RETURNING id`,[req.params.id,req.auth.sub]);
+  if(!rows.length) return res.status(404).json({error:'Caregiver relationship not found'});
+  res.json({ok:true,status:'revoked'});
+});
+
 app.get('/api/caregiver/users',auth,roles('caregiver','admin'),async(req,res)=>{
   const sql=req.auth.role==='admin'
     ? `SELECT u.id,u.name,u.email,u.age,u.language,u.role,COALESCE(ROUND(AVG(g.score)),0)::int AS training_score,COALESCE(ROUND(AVG(g.accuracy)),0)::int AS accuracy,COALESCE(MAX(GREATEST(g.difficulty_before,g.difficulty_after)),1)::int AS level,COUNT(g.id)::int AS sessions,MAX(g.created_at) AS last_activity FROM users u LEFT JOIN game_sessions g ON g.user_id=u.id WHERE u.role='elderly' GROUP BY u.id ORDER BY u.name`
-    : `SELECT u.id,u.name,u.email,u.age,u.language,u.role,COALESCE(ROUND(AVG(g.score)),0)::int AS training_score,COALESCE(ROUND(AVG(g.accuracy)),0)::int AS accuracy,COALESCE(MAX(GREATEST(g.difficulty_before,g.difficulty_after)),1)::int AS level,COUNT(g.id)::int AS sessions,MAX(g.created_at) AS last_activity FROM users u JOIN caregiver_links l ON l.elderly_id=u.id AND l.caregiver_id=$1 LEFT JOIN game_sessions g ON g.user_id=u.id WHERE u.role='elderly' GROUP BY u.id ORDER BY u.name`;
+    : `SELECT u.id,u.name,u.email,u.age,u.language,u.role,COALESCE(ROUND(AVG(g.score)),0)::int AS training_score,COALESCE(ROUND(AVG(g.accuracy)),0)::int AS accuracy,COALESCE(MAX(GREATEST(g.difficulty_before,g.difficulty_after)),1)::int AS level,COUNT(g.id)::int AS sessions,MAX(g.created_at) AS last_activity FROM users u JOIN caregiver_links l ON l.elderly_id=u.id AND l.caregiver_id=$1 AND l.status='active' LEFT JOIN game_sessions g ON g.user_id=u.id WHERE u.role='elderly' GROUP BY u.id ORDER BY u.name`;
   const {rows}=await pool.query(sql,req.auth.role==='admin'?[]:[req.auth.sub]); res.json({users:rows});
 });
 
 app.get('/api/caregiver/users/:id/performance',auth,roles('caregiver','admin'),async(req,res)=>{
   if(req.auth.role==='caregiver'){
-    const link=await pool.query('SELECT 1 FROM caregiver_links WHERE caregiver_id=$1 AND elderly_id=$2',[req.auth.sub,req.params.id]);
+    const link=await pool.query("SELECT 1 FROM caregiver_links WHERE caregiver_id=$1 AND elderly_id=$2 AND status='active'",[req.auth.sub,req.params.id]);
     if(!link.rowCount) return res.status(403).json({error:'Not authorized for this user'});
   }
   const {rows}=await pool.query('SELECT id,name,age,language FROM users WHERE id=$1 AND role=\'elderly\'',[req.params.id]);
@@ -152,7 +208,7 @@ app.get('/api/caregiver/users/:id/performance',auth,roles('caregiver','admin'),a
 
 async function canManageElderly(req, elderlyId){
   if(req.auth.role==='admin') return true;
-  const link=await pool.query('SELECT 1 FROM caregiver_links WHERE caregiver_id=$1 AND elderly_id=$2',[req.auth.sub,elderlyId]);
+  const link=await pool.query("SELECT 1 FROM caregiver_links WHERE caregiver_id=$1 AND elderly_id=$2 AND status='active'",[req.auth.sub,elderlyId]);
   return Boolean(link.rowCount);
 }
 async function getElderlyUser(elderlyId){
@@ -206,6 +262,15 @@ app.get('/api/admin/users',auth,roles('admin'),async(req,res)=>{
     WHERE u.role IN ('elderly','caregiver')
     GROUP BY u.id ORDER BY u.role, u.name`);
   res.json({users:rows});
+});
+
+app.get('/api/admin/caregiver-links',auth,roles('admin'),async(req,res)=>{
+  const values=[]; const filters=[];
+  if(req.query.status && ['pending','active','rejected','revoked'].includes(req.query.status)){ values.push(req.query.status); filters.push(`l.status=$${values.length}`); }
+  if(req.query.search){ values.push(`%${String(req.query.search).trim()}%`); filters.push(`(e.name ILIKE $${values.length} OR e.id::text ILIKE $${values.length} OR c.name ILIKE $${values.length} OR c.id::text ILIKE $${values.length})`); }
+  const where=filters.length?`WHERE ${filters.join(' AND ')}`:'';
+  const {rows}=await pool.query(`SELECT l.id,l.status,l.created_at,l.updated_at,e.id AS elderly_id,e.name AS elderly_name,c.id AS caregiver_id,c.name AS caregiver_name FROM caregiver_links l JOIN users e ON e.id=l.elderly_id JOIN users c ON c.id=l.caregiver_id ${where} ORDER BY l.updated_at DESC`,values);
+  res.json({links:rows});
 });
 
 app.delete('/api/admin/users/:id',auth,roles('admin'),async(req,res)=>{

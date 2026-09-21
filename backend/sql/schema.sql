@@ -13,11 +13,41 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS caregiver_links (
+  id UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,
   caregiver_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   elderly_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('pending','active','rejected','revoked')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (caregiver_id, elderly_id)
 );
+
+ALTER TABLE caregiver_links ADD COLUMN IF NOT EXISTS id UUID DEFAULT gen_random_uuid();
+ALTER TABLE caregiver_links ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active';
+ALTER TABLE caregiver_links ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+UPDATE caregiver_links SET status='active' WHERE status IS NULL;
+UPDATE caregiver_links SET id=gen_random_uuid() WHERE id IS NULL;
+ALTER TABLE caregiver_links ALTER COLUMN id SET NOT NULL;
+ALTER TABLE caregiver_links ALTER COLUMN status SET NOT NULL;
+ALTER TABLE caregiver_links ALTER COLUMN status SET DEFAULT 'active';
+ALTER TABLE caregiver_links ALTER COLUMN updated_at SET NOT NULL;
+ALTER TABLE caregiver_links ALTER COLUMN updated_at SET DEFAULT NOW();
+CREATE UNIQUE INDEX IF NOT EXISTS idx_caregiver_links_id ON caregiver_links(id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_caregiver_links_pending ON caregiver_links(caregiver_id, elderly_id) WHERE status='pending';
+CREATE INDEX IF NOT EXISTS idx_caregiver_links_elderly_status ON caregiver_links(elderly_id, status);
+
+CREATE TABLE IF NOT EXISTS caregiver_invites (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  elderly_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_caregiver_invites_lookup ON caregiver_invites(code_hash);
+CREATE INDEX IF NOT EXISTS idx_caregiver_invites_owner ON caregiver_invites(elderly_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS game_sessions (
   id UUID PRIMARY KEY,

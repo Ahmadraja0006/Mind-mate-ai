@@ -6,7 +6,7 @@ import {
   Globe, Contrast, LogOut, ShieldCheck, Clock, Star, AlertTriangle, Info,
   WifiOff, Wifi, Type as TypeIcon, Eye, PlayCircle, RotateCcw, Flame,
   ClipboardList, Pill, Sparkles, BarChart3, UserCog, Gamepad2, Puzzle,
-  Plus, Trophy, Target, Lock, ChevronDown, Trash2, Pencil,
+  Plus, Trophy, Target, Lock, ChevronDown, Trash2, Pencil, Link2, RefreshCw,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -190,12 +190,6 @@ function buildDemoUsers() {
     };
   });
 }
-
-const DEMO_CAREGIVERS = [
-  { id: "c1", name: "Dr. Nilakshi Phukan", relation: "Primary Caregiver" },
-  { id: "c2", name: "Sonam Wangdi", relation: "Family Caregiver" },
-  { id: "c3", name: "Priya Rai", relation: "Community Health Worker" },
-];
 
 /* ---------------------------- Small UI atoms ---------------------------- */
 function BigButton({ icon: Icon, label, onClick, tone = "primary", sub, disabled }) {
@@ -1535,6 +1529,140 @@ function ToggleRow({ icon: Icon, label, value, onChange }) {
 }
 
 /* ---------------------------- Caregiver ---------------------------- */
+function RelationshipStatus({ status }) {
+  const styles = {
+    pending: { background: palette.amberBg, color: palette.marigoldDark },
+    active: { background: palette.greenBg, color: palette.ok },
+    rejected: { background: "#FDECEA", color: palette.danger },
+    revoked: { background: palette.mist, color: palette.inkSoft },
+  };
+  const style = styles[status] || styles.pending;
+  return <span style={{ ...style, padding: "4px 9px", borderRadius: 999, fontSize: 12, fontWeight: 800, textTransform: "capitalize" }}>{status}</span>;
+}
+
+function CaregiverRelationships({ role, token, onBack }) {
+  const [links, setLinks] = useState([]);
+  const [code, setCode] = useState("");
+  const [expiresAt, setExpiresAt] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  const load = useCallback(async () => {
+    if (!token) { setLoading(false); return; }
+    setLoading(true); setError("");
+    try { const result = await api("/caregiver", {}, token); setLinks(result.links || []); }
+    catch (e) { setError(e.message || "Caregiver relationships could not be loaded."); }
+    finally { setLoading(false); }
+  }, [token]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const createInvite = async () => {
+    setBusy(true); setError(""); setMessage("");
+    try {
+      const result = await api("/caregiver/invite", { method: "POST" }, token);
+      setCode(result.code); setExpiresAt(result.expiresAt);
+      setMessage("Share this code with your caregiver before it expires.");
+    } catch (e) { setError(e.message || "Could not create an invite code."); }
+    finally { setBusy(false); }
+  };
+
+  const connect = async (event) => {
+    event.preventDefault();
+    setBusy(true); setError(""); setMessage("");
+    try {
+      await api("/caregiver/connect", { method: "POST", body: JSON.stringify({ code }) }, token);
+      setCode(""); setMessage("Connection request sent. The elderly user must accept it."); await load();
+    } catch (e) { setError(e.message || "Could not send connection request."); }
+    finally { setBusy(false); }
+  };
+
+  const updateLink = async (id, action) => {
+    setBusy(true); setError(""); setMessage("");
+    try {
+      await api(`/caregiver/requests/${id}/${action}`, { method: "POST" }, token);
+      setMessage(action === "accept" ? "Caregiver connection accepted." : "Caregiver request rejected."); await load();
+    } catch (e) { setError(e.message || "Relationship could not be updated."); }
+    finally { setBusy(false); }
+  };
+
+  const revoke = async (id) => {
+    if (!window.confirm("Remove this caregiver connection?")) return;
+    setBusy(true); setError(""); setMessage("");
+    try { await api(`/caregiver/${id}`, { method: "DELETE" }, token); setMessage("Caregiver connection removed."); await load(); }
+    catch (e) { setError(e.message || "Relationship could not be removed."); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ padding: 24, maxWidth: 760 }}>
+      <TopBar title="Caregiver Connections" onBack={onBack} right={<button onClick={load} aria-label="Refresh connections" disabled={loading} style={{ border: "none", background: palette.mist, color: palette.pine, borderRadius: 10, padding: 9, cursor: "pointer" }}><RefreshCw size={18} /></button>} />
+      {error && <div role="alert" style={{ color: palette.danger, background: "#FDECEA", padding: 10, borderRadius: 10, marginBottom: 12 }}>{error}</div>}
+      {message && <div role="status" style={{ color: palette.ok, background: palette.greenBg, padding: 10, borderRadius: 10, marginBottom: 12 }}>{message}</div>}
+      {role === "elderly" ? (
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 800, marginBottom: 6 }}><Link2 size={19} color={palette.pine} /> Invite a caregiver</div>
+          <div style={{ color: palette.inkSoft, fontSize: 14, marginBottom: 12 }}>Create a one-time code for a trusted caregiver. It expires after 10 minutes.</div>
+          {code && <div style={{ textAlign: "center", fontSize: 34, letterSpacing: 6, fontWeight: 800, color: palette.pine, padding: 12, background: palette.paperDeep, borderRadius: 12, marginBottom: 10 }}>{code}</div>}
+          {expiresAt && <div style={{ color: palette.inkSoft, fontSize: 12, marginBottom: 10 }}>Expires {new Date(expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</div>}
+          <button onClick={createInvite} disabled={busy} style={{ width: "100%", padding: 12, border: "none", borderRadius: 10, background: palette.pine, color: "#fff", fontWeight: 800, cursor: busy ? "wait" : "pointer", opacity: busy ? 0.65 : 1 }}>{busy ? "Working..." : code ? "Create New Code" : "Create Invite Code"}</button>
+        </Card>
+      ) : (
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 800, marginBottom: 6 }}><Link2 size={19} color={palette.pine} /> Connect to an elderly user</div>
+          <div style={{ color: palette.inkSoft, fontSize: 14, marginBottom: 12 }}>Enter the 6-digit code shared by the elderly user.</div>
+          <form onSubmit={connect} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input required inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={code} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6-digit code" aria-label="Caregiver invite code" style={{ flex: 1, minWidth: 180, padding: 11 }} />
+            <button disabled={busy || code.length !== 6} type="submit" style={{ padding: "11px 16px", border: "none", borderRadius: 10, background: palette.pine, color: "#fff", fontWeight: 800, cursor: "pointer", opacity: busy || code.length !== 6 ? 0.6 : 1 }}>Send Request</button>
+          </form>
+        </Card>
+      )}
+      <Card>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}><div style={{ fontWeight: 800 }}>{role === "elderly" ? "Caregivers" : "Elderly users"}</div><span style={{ color: palette.inkSoft, fontSize: 12 }}>{links.length} connection{links.length === 1 ? "" : "s"}</span></div>
+        {loading && <div style={{ color: palette.inkSoft }}>Loading connections...</div>}
+        {!loading && !links.length && <div style={{ color: palette.inkSoft, padding: "10px 0" }}>No caregiver connections yet.</div>}
+        {!loading && links.map(link => (
+          <div key={link.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 0", borderBottom: `1px solid ${palette.mist}`, flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 180 }}><div style={{ fontWeight: 800 }}>{link.name || "Caregiver"}</div><div style={{ color: palette.inkSoft, fontSize: 12 }}>{link.email || ""}</div></div>
+            <RelationshipStatus status={link.status} />
+            {role === "elderly" && link.status === "pending" && <><button disabled={busy} onClick={() => updateLink(link.id, "accept")} style={{ border: "none", borderRadius: 8, padding: "7px 10px", background: palette.greenBg, color: palette.ok, fontWeight: 800, cursor: "pointer" }}>Accept</button><button disabled={busy} onClick={() => updateLink(link.id, "reject")} style={{ border: "none", borderRadius: 8, padding: "7px 10px", background: "#FDECEA", color: palette.danger, fontWeight: 800, cursor: "pointer" }}>Reject</button></>}
+            {((role === "elderly" && ["pending", "active"].includes(link.status)) || (role === "caregiver" && ["pending", "active"].includes(link.status))) && <button disabled={busy} onClick={() => revoke(link.id)} style={{ border: "none", borderRadius: 8, padding: "7px 10px", background: "#FDECEA", color: palette.danger, fontWeight: 800, cursor: "pointer" }}>Remove</button>}
+          </div>
+        ))}
+      </Card>
+    </div>
+  );
+}
+
+function AdminCaregiverRelationships({ token, onBack }) {
+  const [links, setLinks] = useState([]);
+  const [status, setStatus] = useState("");
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const load = useCallback(async () => {
+    setLoading(true); setError("");
+    try { const query = new URLSearchParams(); if (status) query.set("status", status); if (search.trim()) query.set("search", search.trim()); const result = await api(`/admin/caregiver-links?${query}`, {}, token); setLinks(result.links || []); }
+    catch (e) { setError(e.message || "Caregiver relationships could not be loaded."); }
+    finally { setLoading(false); }
+  }, [token, status, search]);
+  useEffect(() => { load(); }, [load]);
+  return (
+    <div style={{ padding: 24, maxWidth: 980 }}>
+      <TopBar title="Caregiver Relationships" onBack={onBack} right={<button onClick={load} aria-label="Refresh relationships" disabled={loading} style={{ border: "none", background: palette.mist, color: palette.pine, borderRadius: 10, padding: 9, cursor: "pointer" }}><RefreshCw size={18} /></button>} />
+      <Card>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search caregiver or elderly user" style={{ flex: 1, minWidth: 220, padding: 10 }} /><select value={status} onChange={event => setStatus(event.target.value)} aria-label="Filter relationship status" style={{ padding: 10, border: `1px solid ${palette.mist}`, borderRadius: 10 }}><option value="">All statuses</option><option value="pending">Pending</option><option value="active">Active</option><option value="rejected">Rejected</option><option value="revoked">Revoked</option></select></div>
+        {error && <div role="alert" style={{ color: palette.danger, background: "#FDECEA", padding: 10, borderRadius: 10, marginBottom: 10 }}>{error}</div>}
+        {loading && <div style={{ color: palette.inkSoft }}>Loading relationships...</div>}
+        {!loading && !links.length && <div style={{ color: palette.inkSoft, padding: "12px 0" }}>No relationships match this filter.</div>}
+        {!loading && links.map(link => <div key={link.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr) auto", gap: 12, alignItems: "center", padding: "12px 0", borderBottom: `1px solid ${palette.mist}` }}><div><div style={{ fontWeight: 800 }}>{link.elderly_name}</div><div style={{ color: palette.inkSoft, fontSize: 12 }}>Elderly user</div></div><div><div style={{ fontWeight: 700 }}>{link.caregiver_name}</div><div style={{ color: palette.inkSoft, fontSize: 12 }}>Caregiver</div></div><RelationshipStatus status={link.status} /></div>)}
+      </Card>
+    </div>
+  );
+}
+
 function CaregiverDashboard({ users, onSelectUser, onBack, alerts, loading, error }) {
   const total = users.length;
   const active = users.filter(u => u.status === "Active").length;
@@ -1829,12 +1957,12 @@ function DoctorAppointments({ user, token }) {
   );
 }
 
-function AdminDashboard({ users, allUsers, games, onBack, onViewUser, onDeleteUser, loading, error, demoMode, initialTab = "overview" }) {
+function AdminDashboard({ users, allUsers, games, onBack, onViewUser, onDeleteUser, loading, error, initialTab = "overview" }) {
   const [tab, setTab] = useState(initialTab);
   const [busyId, setBusyId] = useState(null);
   useEffect(() => setTab(initialTab), [initialTab]);
-  const managedUsers = demoMode && !allUsers.length ? users : allUsers;
-  const caregiverCount = demoMode && !allUsers.length ? DEMO_CAREGIVERS.length : allUsers.filter(u => u.role === "caregiver").length;
+  const managedUsers = allUsers;
+  const caregiverCount = allUsers.filter(u => u.role === "caregiver").length;
   const handleDelete = async (u) => {
     if (!window.confirm(`Delete ${u.name} (${u.role})? This permanently removes their account, sessions, and reminders. This cannot be undone.`)) return;
     setBusyId(u.id);
@@ -1868,11 +1996,6 @@ function AdminDashboard({ users, allUsers, games, onBack, onViewUser, onDeleteUs
             <div style={{ fontWeight: 800 }}>Manage Users &amp; Caregivers</div>
             <span style={{ fontSize: 12, color: palette.inkSoft }}>{managedUsers.length} total</span>
           </div>
-          {demoMode && !allUsers.length && (
-            <div style={{ fontSize: 12, color: palette.inkSoft, background: palette.paperDeep, borderRadius: 10, padding: 10, marginBottom: 10 }}>
-              Showing demo data — connect a live backend to manage real accounts.
-            </div>
-          )}
           {loading && <div style={{ color: palette.inkSoft, padding: "12px 0" }}>Loading users...</div>}
           {error && <div role="alert" style={{ color: palette.danger, background: "#FDECEA", borderRadius: 10, padding: 10, marginBottom: 10 }}>{error}</div>}
           {!loading && !error && managedUsers.length === 0 && <div style={{ color: palette.inkSoft, padding: "12px 0" }}>No users found.</div>}
@@ -1969,11 +2092,11 @@ function AppSidebar({ role, screen, onNav, onLogout }) {
     ? [
         ["elderlyHome", "Home", Home], ["training", "Training / Games", Brain],
         ["progress", "Progress", TrendingUp], ["assistant", "Memory Assistant", ClipboardList],
-        ["assistant", "Reminders", Bell], ["settings", "Settings", SettingsIcon],
+        ["assistant", "Reminders", Bell], ["caregiverRelationships", "Caregiver", Users], ["settings", "Settings", SettingsIcon],
       ]
     : role === "caregiver"
-      ? [["caregiverDashboard", "Dashboard", Home], ["caregiverUsers", "Users", Users], ["userAnalytics", "Analytics", BarChart3], ["settings", "Settings", SettingsIcon]]
-      : [["adminDashboard", "Dashboard", Home], ["adminUsers", "Users", Users], ["adminGames", "Games", Gamepad2], ["settings", "Settings", SettingsIcon]];
+      ? [["caregiverDashboard", "Dashboard", Home], ["caregiverUsers", "Users", Users], ["userAnalytics", "Analytics", BarChart3], ["caregiverRelationships", "Connections", Link2], ["settings", "Settings", SettingsIcon]]
+      : [["adminDashboard", "Dashboard", Home], ["adminUsers", "Users", Users], ["adminGames", "Games", Gamepad2], ["adminRelationships", "Relationships", Link2], ["settings", "Settings", SettingsIcon]];
   return (
     <aside className="mm-sidebar">
       <div className="mm-brand">
@@ -2250,14 +2373,14 @@ export default function MindMateAI() {
   const doLogout = () => { localStorage.removeItem("mindmate_token"); localStorage.removeItem("mindmate_user"); setToken(""); setAccount(null); setRole(null); setScreen("roleSelect"); };
   const handleSidebarNav = (target) => {
     if (role === "caregiver" && target === "userAnalytics") {
-      const users = token ? remoteUsers : demoUsers;
+      const users = remoteUsers;
       if (selectedUser) return setScreen("userAnalytics");
       if (users[0]) return viewUserAnalytics(users[0]);
       return setScreen("caregiverUsers");
     }
-    if (role === "admin" && !["adminDashboard", "adminUsers", "adminGames", "settings"].includes(target)) return;
-    if (role === "caregiver" && !["caregiverDashboard", "caregiverUsers", "userAnalytics", "settings"].includes(target)) return;
-    if (role === "elderly" && !["elderlyHome", "training", "progress", "assistant", "settings"].includes(target)) return;
+    if (role === "admin" && !["adminDashboard", "adminUsers", "adminGames", "adminRelationships", "settings"].includes(target)) return;
+    if (role === "caregiver" && !["caregiverDashboard", "caregiverUsers", "userAnalytics", "caregiverRelationships", "settings"].includes(target)) return;
+    if (role === "elderly" && !["elderlyHome", "training", "progress", "assistant", "caregiverRelationships", "settings"].includes(target)) return;
     setScreen(target);
   };
   const handleAddReminder = async (form) => {
@@ -2416,7 +2539,11 @@ export default function MindMateAI() {
           <PrivacySecurityScreen account={account} token={token} onBack={() => setScreen("settings")} onLogout={doLogout} />
         )}
 
-        {["elderlyHome", "training", "gameSelection", "playing", "result", "progress", "assistant", "help", "settings", "profile", "changePassword", "privacySecurity"].includes(screen) && (
+        {screen === "caregiverRelationships" && (
+          <CaregiverRelationships role="elderly" token={token} onBack={() => setScreen("elderlyHome")} />
+        )}
+
+        {["elderlyHome", "training", "gameSelection", "playing", "result", "progress", "assistant", "help", "caregiverRelationships", "settings", "profile", "changePassword", "privacySecurity"].includes(screen) && (
         <div className="mm-elderly-nav" style={{
           background: "#fff", borderTop: `1px solid ${palette.mist}`,
           display: "flex", justifyContent: "space-around", padding: "6px 12px",
@@ -2424,6 +2551,7 @@ export default function MindMateAI() {
           <NavIcon icon={Home} active={screen === "elderlyHome"} onClick={() => setScreen("elderlyHome")} label={t.elderlyHome} />
           <NavIcon icon={ClipboardList} active={screen === "assistant"} onClick={() => setScreen("assistant")} label={t.memoryAssistant.split(" ")[0]} />
           <NavIcon icon={TrendingUp} active={screen === "progress"} onClick={() => setScreen("progress")} label={t.myProgress.split(" ")[1] || "Progress"} />
+          <NavIcon icon={Users} active={screen === "caregiverRelationships"} onClick={() => setScreen("caregiverRelationships")} label="Caregiver" />
           <NavIcon icon={SettingsIcon} active={screen === "settings"} onClick={() => setScreen("settings")} label={t.settings} />
         </div>
       )}
@@ -2462,8 +2590,16 @@ export default function MindMateAI() {
           <PrivacySecurityScreen account={account} token={token} onBack={() => setScreen("settings")} onLogout={doLogout} />
         )}
 
+        {screen === "caregiverRelationships" && role === "caregiver" && (
+          <CaregiverRelationships role="caregiver" token={token} onBack={() => setScreen("caregiverDashboard")} />
+        )}
+
+        {screen === "adminRelationships" && role === "admin" && (
+          <AdminCaregiverRelationships token={token} onBack={() => setScreen("adminDashboard")} />
+        )}
+
           {["caregiverDashboard", "caregiverUsers"].includes(screen) && role === "caregiver" && (
-            <CaregiverDashboard users={token ? remoteUsers.map(u => ({...u, trainingScore:Number(u.training_score||0), accuracy:Number(u.accuracy||0), level:Number(u.level||1), status:u.last_activity ? "Active" : "Inactive", lastActivity:u.last_activity && new Date(u.last_activity).toDateString() === new Date().toDateString() ? "Today" : u.last_activity ? new Date(u.last_activity).toLocaleDateString() : "Never"})) : demoUsers} alerts={token ? [] : alerts} loading={token && caregiverUsersLoading} error={token ? caregiverUsersError : ""}
+            <CaregiverDashboard users={token ? remoteUsers.map(u => ({...u, trainingScore:Number(u.training_score||0), accuracy:Number(u.accuracy||0), level:Number(u.level||1), status:u.last_activity ? "Active" : "Inactive", lastActivity:u.last_activity && new Date(u.last_activity).toDateString() === new Date().toDateString() ? "Today" : u.last_activity ? new Date(u.last_activity).toLocaleDateString() : "Never"})) : []} alerts={[]} loading={token && caregiverUsersLoading} error={token ? caregiverUsersError : ""}
           onBack={() => setScreen("roleSelect")}
           onSelectUser={viewUserAnalytics} />
       )}
@@ -2474,14 +2610,14 @@ export default function MindMateAI() {
 
           {["adminDashboard", "adminUsers", "adminGames"].includes(screen) && role === "admin" && (
         <AdminDashboard
-          users={token ? allUsers.filter(u => u.role === "elderly").map(u => ({...u, trainingScore:Number(u.training_score||0), level:Number(u.level||1), language:u.language})) : demoUsers}
+          users={allUsers.filter(u => u.role === "elderly").map(u => ({...u, trainingScore:Number(u.training_score||0), level:Number(u.level||1), language:u.language}))}
           allUsers={allUsers.map(u => ({...u, trainingScore:Number(u.training_score||0), accuracy:Number(u.accuracy||0), level:Number(u.level||1)}))}
-          loading={token && adminUsersLoading} error={token ? adminUsersError : ""} demoMode={!token}
+          loading={token && adminUsersLoading} error={token ? adminUsersError : ""}
           games={GAME_META} initialTab={screen === "adminUsers" ? "users" : screen === "adminGames" ? "games" : "overview"} onBack={() => setScreen("roleSelect")}
           onViewUser={viewUserAnalytics} onDeleteUser={deleteUser} />
       )}
 
-      {["caregiverDashboard", "caregiverUsers", "userAnalytics", "adminDashboard", "adminUsers", "adminGames"].includes(screen) && (
+      {["caregiverDashboard", "caregiverUsers", "userAnalytics", "caregiverRelationships", "adminDashboard", "adminUsers", "adminGames", "adminRelationships"].includes(screen) && (
         <div className="mm-mobile-nav" style={{
           background: "#fff", borderTop: `1px solid ${palette.mist}`,
           display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 12px",
