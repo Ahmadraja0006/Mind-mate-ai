@@ -1,7 +1,9 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+const base = process.env.VITE_BASE_PATH || '/Mind-mate-ai/';
+
 export default defineConfig({
-	base: process.env.GITHUB_PAGES === 'true' ? '/Mind-mate-ai/' : '/',
+	base,
 	plugins: [react()],
 });
