@@ -2623,6 +2623,9 @@ export default function MindMateAI() {
           display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 12px",
         }}>
           <span style={{ fontSize: 12, color: palette.inkSoft }}>SIH26003 · MindMate AI</span>
+          <button onClick={() => setScreen(role === "caregiver" ? "caregiverRelationships" : "adminRelationships")} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, color: palette.inkSoft, fontSize: 12, fontWeight: 700 }}>
+            <Link2 size={18} /> {role === "caregiver" ? "Connections" : "Relationships"}
+          </button>
           <button onClick={() => setScreen("settings")} style={{ background: "none", border: "none", cursor: "pointer" }}>
             <SettingsIcon size={20} color={palette.inkSoft} />
           </button>
