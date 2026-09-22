@@ -15,6 +15,7 @@ const pool = new Pool({
 });
 const allowedOrigins = [...new Set([
   ...(process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',').map(s=>s.trim()),
+  'https://ahmadraja0006.github.io',
   'http://localhost',
   'https://localhost',
 ])];
